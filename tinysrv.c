@@ -140,7 +140,7 @@ static int ts_listen(ts_socket_t *sock) {
     if ( sockfd < 0 ) {
       if ( errno == EAGAIN || errno == EWOULDBLOCK ) {
         /* Client closed connection before we got a chance to accept it. */
-        MYLOG(LOG_INFO, "Child accept(): %m");
+        DEBUG_PRINT("Child accept(): %d", errno);
       }
       else {
         syslog(LOG_WARNING, "Child accept() returned error: %m.");

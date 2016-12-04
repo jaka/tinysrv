@@ -7,9 +7,6 @@
 #define FORK
 #define _GNU_SOURCE
 
-/* TODO: Remove! */
-#define MYLOG(x,y,...)
-
 #include "debug.h"
 
 #define PROGRAM_NAME "tinysrv"
