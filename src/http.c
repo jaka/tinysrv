@@ -57,45 +57,54 @@ static unsigned int http_header_field_getindex(unsigned int key_index) {
 
 static unsigned int http_header_parse_connection(const char *str, const unsigned int len) {
 
-  unsigned int i;
+  char *end_str;
   unsigned int connection;
 
   connection = 0;
 
-  i = 0;
-  while ( i < len ) {
+  end_str = (char *)str + len;
+  while ( str < end_str ) {
+
     switch ( *str ) {
+
       case 'K':
       case 'k':
-        if ( !strncasecmp(str + i, "keep-alive", 10) ) {
+        if ( !strncasecmp(str, "keep-alive", 10) ) {
           DEBUG_PRINT("Connection: keep-alive.");
           connection |= HTTP_CONNECTION_KEEPALIVE;
-          i += 10;
+          str += 10;
         }
         break;
+
       case 'C':
       case 'c':
-        if ( !strncasecmp(str + i, "close", 5) ) {
+        if ( !strncasecmp(str, "close", 5) ) {
           DEBUG_PRINT("Connection: close.");
           connection &= ~HTTP_CONNECTION_KEEPALIVE;
           str += 5;
         }
         break;
+
       case 'U':
       case 'u':
-        if ( !strncasecmp(str + i, "upgrade", 5) ) {
+        if ( !strncasecmp(str, "upgrade", 5) ) {
           DEBUG_PRINT("Connection: upgrade.");
           connection |= HTTP_CONNECTION_UPGRADE;
-          str += 5;
+          str += 7;
         }
+        break;
+
       case ' ':
       case ',':
-        i++;
+        str++;
         break;
+
       default:
-        i = len;
+        str = end_str;
     }
+
   }
+
   return connection;
 }
 
