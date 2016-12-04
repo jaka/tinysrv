@@ -1,4 +1,4 @@
-OPTS	:= -O0
+OPTS	:= -O2
 #-O0 -g -ggdb
 CFLAGS	+= -Isrc -std=c99 -Wall -Wextra -ffunction-sections -fdata-sections -fno-strict-aliasing
 LDFLAGS	+= -Wl,--gc-sections -lrt -lssl
