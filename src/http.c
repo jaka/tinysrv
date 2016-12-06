@@ -112,25 +112,25 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
   char *str;
   char *tok, *line;
-  int tok_length, line_length;
+  unsigned int tok_length, line_length;
 
   *error = 400;
+  line = buffer;
 
   /* Determine the length of the Request-Line (first line in HTTP request). */
-  line_length = find_delimiter(buffer, &line, "\r\n");
+  str = tu_strbtok(&line, &line_length, "\r\n");
   if ( line_length < 12 )
     return -1;
 
   /* Parse HTTP method. */
-  tok_length = find_delimiter(buffer, &str, " ");
-
+  tok = tu_strtok(&str, &tok_length, " \t");
   if ( tok_length == 0 )
     return -1;
-  if ( !strncasecmp(buffer, http_method_getstr(HTTP_METHOD_GET), tok_length) )
+  if ( !strncasecmp(tok, http_method_getstr(HTTP_METHOD_GET), tok_length) )
     header->method = HTTP_METHOD_GET;
-  else if ( !strncasecmp(buffer, http_method_getstr(HTTP_METHOD_HEAD), tok_length) )
+  else if ( !strncasecmp(tok, http_method_getstr(HTTP_METHOD_HEAD), tok_length) )
     header->method = HTTP_METHOD_HEAD;
-  else if ( !strncasecmp(buffer, http_method_getstr(HTTP_METHOD_POST), tok_length) ) {
+  else if ( !strncasecmp(tok, http_method_getstr(HTTP_METHOD_POST), tok_length) ) {
     header->method = HTTP_METHOD_POST;
     *error = 501;
     return -1;
@@ -141,30 +141,21 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
     return -1;
   }
 
-  /* Parse HTTP path. */
-  while ( str && *str == ' ' )
+  while ( *str && (*str == ' ' || *str == '\t') )
     str++;
+
+  /* Parse HTTP Request-URI. */
   if ( *str != '/' )
     return -1;
-
-  tok = str;
-  tok_length = find_delimiter(NULL, &str, " ");
+  tok = tu_strtok(&str, &tok_length, " \t");
   header->filename = strndup(tok, tok_length);
   header->query = header->filename + tok_length;
 
-  tok = header->filename;
-  while ( *tok ) {
-    if ( *tok == '?' || *tok == '#' || *tok == ';' || *tok == '=' || *tok == ' ' ) {
-      *tok = 0;
-      header->query = tok + 1;
-      break;
-    }
-    tok++;
-  }
+  while ( *str && (*str == ' ' || *str == '\t') )
+    str++;
 
   /* Parse HTTP version. */
-  tok = str;
-  tok_length = find_delimiter(NULL, &str, "\r\n");
+  tok = tu_strbtok(&str, &tok_length, "\r\n");
   if ( tok_length != 8 )
     return -1;
 
@@ -186,20 +177,30 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
   header->header_start = line;
 
+  /* Separate path and query. */
+  tok = header->filename;
+  while ( *tok ) {
+    if ( *tok == '?' || *tok == '#' || *tok == ';' || *tok == '=' || *tok == ' ' ) {
+      *tok = 0;
+      header->query = tok + 1;
+      break;
+    }
+    tok++;
+  }
+
   /* Parse connection field. */
-  for ( line_length = find_delimiter(line, &str, "\r\n"); line_length; line = str, line_length = find_delimiter(NULL, &str, "\r\n") ) {
+  for ( str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n") ) {
 
-    tok = line;
-    if ( strncasecmp(tok, "Conn", 4) )
+    if ( strncasecmp(str, "Conn", 4) )
       continue;
 
-    if ( *(tok + 10) != ':' )
+    if ( *(str + 10) != ':' )
       continue;
 
-    tok += 11;
+    str += 11;
     line_length -= 11;
 
-    header->connection = http_header_parse_connection(tok, line_length);
+    header->connection = http_header_parse_connection(str, line_length);
 
     break;
   }
