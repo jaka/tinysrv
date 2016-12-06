@@ -380,9 +380,13 @@ int connection_new(ts_socket_t *sock, int fd) {
   DEBUG_PRINT("Reading from socket %d.", fd);
 
   request_buffer_size = connection_read(sock, &ssl, fd, request_buffer, sizeof(request_buffer) - 1);
-  DEBUG_PRINT("Received %d bytes.", request_buffer_size);
+  if ( request_buffer_size < 0 && errno != 0 ) {
+     DEBUG_PRINT("Received errno: %d", errno);
+  }
 
   if ( request_buffer_size > 0 ) {
+
+    DEBUG_PRINT("Received %d bytes.", request_buffer_size);
 
     if ( request_buffer[0] == 0x16 ) {
       send(fd, content_noSSL, sizeof(content_noSSL) - 1, MSG_NOSIGNAL);
