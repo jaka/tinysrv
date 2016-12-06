@@ -172,13 +172,16 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
     /* HTTP/2.0 is not yet supported. */
     return -1;
 
-  if ( *(tok + 5) == '1' )
-    header->version = HTTP_VERSION_11;
-  else if ( *(tok + 5) == '0' )
-    header->version = HTTP_VERSION_10;
-  else {
-    header->version = HTTP_VERSION_UNKNOWN;
-    return -1;
+  switch ( *(tok + 7) ) {
+    case '1':
+      header->version = HTTP_VERSION_11;
+      break;
+    case '0':
+      header->version = HTTP_VERSION_10;
+      break;
+    default:
+      header->version = HTTP_VERSION_UNKNOWN;
+      return -1;
   }
 
   header->header_start = line;
