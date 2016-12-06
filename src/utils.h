@@ -1,6 +1,9 @@
 #ifndef _UTILS_H
 #define _UTILS_H
 
+char *tu_strtok(char **, unsigned int *, const char *);
+char *tu_strbtok(char **, unsigned int *, const char *);
+
 unsigned int find_delimiter(const char *startptr, char **endptr, const char *delimiters);
 char *strnstr(const char *str, const char *needle, int len);
 char *strstr_last(const char* const str1, const char* const str2);

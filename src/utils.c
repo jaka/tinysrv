@@ -3,6 +3,86 @@
 #include <ctype.h> /* isprint(), isdigit(), tolower(), isalnum() */
 #include <string.h> /* strlen() */
 
+char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters) {
+
+  char *start_ptr;
+  unsigned int cur_delimiter, delimiters_length, delimiter_found;
+
+  *match_length = 0;
+  if ( str == NULL || *str == NULL )
+    return NULL;
+
+  delimiters_length = strlen(delimiters);
+  if ( delimiters_length == 0 )
+    return NULL;
+
+  start_ptr = *str;
+
+  while ( **str ) {
+
+    delimiter_found = 0;
+    for ( cur_delimiter = 0; cur_delimiter < delimiters_length; cur_delimiter++)
+      if ( **str == *(delimiters + cur_delimiter) ) {
+        delimiter_found = 1;
+        break;
+      }
+    (*str)++;
+
+    if ( delimiter_found == 1 )
+      break;
+
+    (*match_length)++;
+  }
+
+  if ( delimiter_found == 0 )
+    *match_length = 0;
+
+  return start_ptr;
+}
+
+char *tu_strbtok(char **str, unsigned int *match_length, const char *delimiter) {
+
+  char *start_ptr;
+  unsigned int cur_delimiter, delimiter_length;
+
+  *match_length = 0;
+  if ( str == NULL || *str == NULL )
+    return NULL;
+
+  delimiter_length = strlen(delimiter);
+  if ( delimiter_length == 0 )
+    return NULL;
+
+  start_ptr = *str;
+
+  cur_delimiter = 0;
+  while ( **str ) {
+
+    (*match_length)++;
+    if ( **str == *(delimiter + cur_delimiter) ) {
+      cur_delimiter++;
+      if ( cur_delimiter == delimiter_length ) {
+        (*match_length) -= delimiter_length;
+        (*str)++;
+        break;
+      }
+    }
+    else {
+      if ( **str == *delimiter )
+        cur_delimiter = 1;
+      else
+        cur_delimiter = 0;
+    }
+
+    (*str)++;
+  }
+
+  if ( cur_delimiter != delimiter_length )
+    *match_length = 0;
+
+  return start_ptr;
+}
+
 unsigned int find_delimiter(const char *startptr, char **endptr, const char *delimiters) {
 
   char *ptr;
