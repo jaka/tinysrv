@@ -193,12 +193,23 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
     if ( strncasecmp(str, "Conn", 4) )
       continue;
+    str += 10;
+    line_length -= 10;
 
-    if ( *(str + 10) != ':' )
+    while ( *str && *str != ':' && line_length > 0 ) {
+      str++;
+      line_length--;
+    }
+
+    if ( *str != ':' )
       continue;
+    str++;
+    line_length--;
 
-    str += 11;
-    line_length -= 11;
+    while ( *str && (*str == ' ' || *str == '\t') ) {
+      str++;
+      line_length--;
+    }
 
     header->connection = http_header_parse_connection(str, line_length);
 
@@ -217,26 +228,31 @@ char *http_header_getvalue(ps_http_request_header_t *header, const unsigned int 
   index = http_header_field_getindex(key_index);
 
   line = header->header_start;
-  for ( line_length = find_delimiter(line, &str, "\r\n"); line_length; line = str, line_length = find_delimiter(NULL, &str, "\r\n") ) {
+  for ( str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n") ) {
 
-    if ( strncasecmp(line, http_field_keys[index].key, http_field_keys[index].short_key_length) )
+    if ( strncasecmp(str, http_field_keys[index].key, http_field_keys[index].short_key_length) )
       continue;
-
-    line += strlen(http_field_keys[index].key);
+    str += strlen(http_field_keys[index].key);
     line_length -= strlen(http_field_keys[index].key);
 
-    if ( *line != ':' )
-      continue;
-    line++;
-    line_length--;
-
-    while ( line && *line == ' ' ) {
-      line++;
+    while ( *str && *str != ':' && line_length > 0 ) {
+      str++;
       line_length--;
     }
 
-    return strndup(line, line_length);
+    if ( *str != ':' )
+      continue;
+    str++;
+    line_length--;
+
+    while ( *str && (*str == ' ' || *str == '\t') ) {
+      str++;
+      line_length--;
+    }
+
+    return strndup(str, line_length);
   }
+
   return NULL;
 }
 
