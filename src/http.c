@@ -116,7 +116,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
   *error = 400;
 
-  /* Determine the length of the first line in HTTP header. */
+  /* Determine the length of the Request-Line (first line in HTTP request). */
   line_length = find_delimiter(buffer, &line, "\r\n");
   if ( line_length < 12 )
     return -1;

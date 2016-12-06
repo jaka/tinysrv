@@ -46,9 +46,14 @@ static const http_field_key_t http_field_keys[] = {
 
 typedef enum {
   HTTP_METHOD_UNKNOWN,
+  HTTP_METHOD_OPTIONS,
   HTTP_METHOD_GET,
+  HTTP_METHOD_HEAD,
   HTTP_METHOD_POST,
-  HTTP_METHOD_HEAD
+  HTTP_METHOD_PUT,
+  HTTP_METHOD_DELETE,
+  HTTP_METHOD_TRACE,
+  HTTP_METHOD_CONNECT
 } http_method;
 
 typedef enum {
