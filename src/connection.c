@@ -398,7 +398,10 @@ int connection_new(ts_socket_t *sock, int fd) {
       if ( request_header.method == HTTP_METHOD_POST ) {
         /* Socket may still be opened for reading, so read any data that is still waiting for us. */
         do {
-          request_buffer_size = recv(fd, request_buffer, CHAR_BUF_SIZE, 0);
+          if ( sock->options & DO_SSL )
+            SSL_read(ssl.s, request_buffer, sizeof(request_buffer) - 1);
+          else
+            request_buffer_size = recv(fd, request_buffer, sizeof(request_buffer) - 1, 0);
         } while ( request_buffer_size > 0 );
       }
 
