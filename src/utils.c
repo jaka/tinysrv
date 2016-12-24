@@ -17,10 +17,9 @@ char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters) 
     return NULL;
 
   start_ptr = *str;
-
+  delimiter_found = 0;
   while ( **str ) {
 
-    delimiter_found = 0;
     for ( cur_delimiter = 0; cur_delimiter < delimiters_length; cur_delimiter++)
       if ( **str == *(delimiters + cur_delimiter) ) {
         delimiter_found = 1;
