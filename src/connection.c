@@ -273,9 +273,6 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
 
   int rv;
 
-  if ( sock->cert_path == NULL )
-    sock->options &= ~DO_SSL;
-
   if ( sock->options & DO_SSL ) {
 
     ssl->cert_path = sock->cert_path;

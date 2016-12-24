@@ -162,6 +162,9 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv) {
         return -1;
       }
 
+      if ( cur_socket->cert_path == NULL )
+        cur_socket->options &= ~DO_SSL;
+
       /* Update global configuration list */
       cur_socket->next = config->sock;
       config->sock = cur_socket;
