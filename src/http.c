@@ -141,7 +141,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
     return -1;
   }
 
-  while ( *str && (*str == ' ' || *str == '\t') )
+  while ( *str == ' ' || *str == '\t' )
     str++;
 
   /* Parse HTTP Request-URI. */
@@ -151,7 +151,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   header->filename = strndup(tok, tok_length);
   header->query = header->filename + tok_length;
 
-  while ( *str && (*str == ' ' || *str == '\t') )
+  while ( *str == ' ' || *str == '\t' )
     str++;
 
   /* Parse HTTP version. */
@@ -206,7 +206,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
     str++;
     line_length--;
 
-    while ( *str && (*str == ' ' || *str == '\t') ) {
+    while ( *str == ' ' || *str == '\t' ) {
       str++;
       line_length--;
     }
@@ -245,7 +245,7 @@ char *http_header_getvalue(ps_http_request_header_t *header, const unsigned int 
     str++;
     line_length--;
 
-    while ( *str && (*str == ' ' || *str == '\t') ) {
+    while ( *str == ' ' || *str == '\t' ) {
       str++;
       line_length--;
     }
