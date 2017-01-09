@@ -112,17 +112,15 @@ int subprocess_run(void) {
 
     syslog(LOG_INFO, "Subprocess with PID %ld exited with status 0x%04x.", (long)pid, status);
 
-    if ( pid > 0 && WIFEXITED(status) ) {
-      if ( WEXITSTATUS(status) != EXIT_FAILURE ) {
-        for ( cur_process = process_list; cur_process; cur_process = cur_process->next )
-          if ( cur_process->pid == pid ) {
-            cur_process->pid = 0;
-            DEBUG_PRINT("Subprocess scheduled for restart.");
-          }
-      }
-      else {
+    if ( pid == -1 || ( WIFEXITED(status) && WEXITSTATUS(status) == EXIT_FAILURE ) ) {
         terminated = 1;
-      }
+    }
+    else {
+      for ( cur_process = process_list; cur_process; cur_process = cur_process->next )
+        if ( cur_process->pid == pid ) {
+          cur_process->pid = 0;
+          DEBUG_PRINT("Subprocess scheduled for restart.");
+        }
     }
 
     if ( terminated ) {
