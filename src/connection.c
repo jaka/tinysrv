@@ -399,7 +399,7 @@ int connection_new(ts_socket_t *sock, int fd) {
         /* Socket may still be opened for reading, so read any data that is still waiting for us. */
         do {
           if ( sock->options & DO_SSL )
-            SSL_read(ssl.s, request_buffer, sizeof(request_buffer) - 1);
+            request_buffer_size = SSL_read(ssl.s, request_buffer, sizeof(request_buffer) - 1);
           else
             request_buffer_size = recv(fd, request_buffer, sizeof(request_buffer) - 1, 0);
         } while ( request_buffer_size > 0 );
