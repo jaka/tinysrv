@@ -66,7 +66,7 @@ static int ts_bind(ts_socket_t *sock) {
 
     freeaddrinfo(servinfo);
 
-    syslog(LOG_INFO, "Listening on address %s and port %s.", cur_sock->ipaddr, cur_sock->port);
+    syslog(LOG_INFO, "Listening on address %s and port %s with options: %d.", cur_sock->ipaddr, cur_sock->port, cur_sock->options);
   }
 
   return 0;
