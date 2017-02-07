@@ -26,7 +26,9 @@ static const char content_noSSL[] =
 static const char content_jsclose[] =
   "<!DOCTYPE html><html><head><meta charset='utf-8'/>"
   "<title></title><script type='text/javascript'>"
-  "if(self==top)window.close();"
+  "var a=window,b=document,c=b.referrer,z='.',D=function(u){var d=u.indexOf('://')>-1?u.split('/')[2]:u.split('/')[0];return d.indexOf(z)>-1?d:d.split(z)[0]};"
+  "if(c&&c.length>0){var d=D(c),e=d.split(z).reverse();if(e.length>1){var f='u='+e.slice(0,2).reverse().join(z);b.cookie!=f&&(b.cookie=f,a.history.back())}}"
+  "if(self==top)a.close();"
   "</script></head></html>";
 
 int connection_new(ts_socket_t *, int);
