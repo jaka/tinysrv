@@ -271,6 +271,7 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error) {
 
 static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen) {
 
+#ifdef USE_SSL
   int rv;
 
   if ( sock->options & DO_SSL ) {
@@ -284,6 +285,7 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
       return -1;
 
   }
+#endif /* USE_SSL */
 
   return recv(fd, buf, buflen, 0);
 }
@@ -312,17 +314,22 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   if ( response_buffer_size < 0 )
     return -1;
 
+#ifdef USE_SSL
   if ( sock->options & DO_SSL )
     size = SSL_write(ssl->s, response_buffer, response_buffer_size);
   else
+#endif /* USE_SSL */
     size = send(fd, response_buffer, response_buffer_size, flags);
 
   if ( connection->filefd ) {
 
+#ifdef USE_SSL
     if ( sock->options & DO_SSL ) {
       ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
     }
-    else {
+    else
+#endif /* USE_SSL */
+    {
       /* Output file hander content. */
       offset = 0;
       size += sendfile(fd, connection->filefd, &offset, connection->length);
@@ -331,10 +338,12 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
     close(connection->filefd);
   }
   else if ( connection->str ) {
+#ifdef USE_SSL
     /* Output constant buffer. */
     if ( sock->options & DO_SSL )
       size += SSL_write(ssl->s, connection->str, connection->length);
     else
+#endif /* USE_SSL */
       size += send(fd, connection->str, connection->length, MSG_NOSIGNAL);
   }
 
@@ -398,9 +407,11 @@ int connection_new(ts_socket_t *sock, int fd) {
       if ( request_header.method == HTTP_METHOD_POST ) {
         /* Socket may still be opened for reading, so read any data that is still waiting for us. */
         do {
+#ifdef USE_SSL
           if ( sock->options & DO_SSL )
             request_buffer_size = SSL_read(ssl.s, request_buffer, sizeof(request_buffer) - 1);
           else
+#endif /* USE_SSL */
             request_buffer_size = recv(fd, request_buffer, sizeof(request_buffer) - 1, 0);
         } while ( request_buffer_size > 0 );
       }
@@ -429,10 +440,12 @@ int connection_new(ts_socket_t *sock, int fd) {
     }
   }
 
+#ifdef USE_SSL
   if ( sock->options & DO_SSL ) {
     DEBUG_PRINT("Closing down ssl");
     ts_ssl_session_close(&ssl);
   }
+#endif
 
   /* Close the connection. */
   shutdown(fd, SHUT_RDWR);

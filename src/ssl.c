@@ -1,3 +1,5 @@
+#ifdef USE_SSL
+
 #include "ssl.h"
 #include "utils.h"
 
@@ -142,3 +144,5 @@ int ts_ssl_session_close(struct ts_ssl *ssl) {
   SSL_CTX_free(ssl->context);
   return 0;
 }
+
+#endif /* USE_SSL */

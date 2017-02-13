@@ -166,8 +166,10 @@ int ts_main_loop(void *arg) {
     return 1;
   }
 
+#ifdef USE_SSL
   /* SSL */
   SSL_library_init();
+#endif /* USE_SSL */
 
   /* Change user. */
   if ( config->pw != NULL && setuid(config->pw->pw_uid) ) {
