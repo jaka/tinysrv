@@ -295,7 +295,7 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   char response_buffer[CHAR_BUF_SIZE];
   int response_buffer_size;
   int size;
-  char content_length[8];
+  char content_length[11];
   off_t offset;
   int flags;
 
