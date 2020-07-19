@@ -108,6 +108,9 @@ int subprocess_run(void) {
     }
 
     /* Wait for any subprocesses to exit. */
+#ifndef WAIT_ANY
+ #define WAIT_ANY -1
+#endif
     pid = waitpid(WAIT_ANY, &status, 0);
 
     syslog(LOG_INFO, "Subprocess with PID %ld exited with status 0x%04x.", (long)pid, status);
