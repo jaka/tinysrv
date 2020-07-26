@@ -10,6 +10,7 @@ static void ts_socket_load_defaults(ts_socket_t *sock) {
   sock->port = NULL;
   sock->options = DO_204 | DO_REDIRECT;
   sock->serve_path_length = 0;
+  sock->serve_path = NULL;
   sock->cert_path = NULL;
 }
 
@@ -32,8 +33,10 @@ static int ts_socket_free(ts_socket_t *sock) {
     free(sock->ipaddr);
   if ( sock->port )
     free(sock->port);
-  if ( sock->serve_path_length > 0 && sock->serve_path )
+  if (sock->serve_path) {
+    sock->serve_path_length = 0;
     free(sock->serve_path);
+  }
   if ( sock->cert_path )
     free(sock->cert_path);
   free(sock);
@@ -126,10 +129,17 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv) {
             continue;
 
           case 'S':
+            if (cur_socket->serve_path)
+              free(cur_socket->serve_path);
             cur_socket->serve_path = strdup(argv[i]);
+            if (!cur_socket->serve_path) {
+              error = 1;
+              continue;
+            }
             /* TODO: Clean and check path. */
             cur_socket->serve_path_length = strlen(cur_socket->serve_path);
-            if ( *(cur_socket->serve_path + cur_socket->serve_path_length - 1) != '/' ) {
+            if (cur_socket->serve_path_length == 0 || *(cur_socket->serve_path + cur_socket->serve_path_length - 1) != '/') {
+              cur_socket->serve_path_length = 0;
               free(cur_socket->serve_path);
               error = 1;
             }
