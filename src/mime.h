@@ -124,6 +124,17 @@ static const char httpnull_ico[] =
   "\x00\x00\x00\x00" /* XOR B G R */
   "\x80\xF8\x9C\x41"; /* AND ? */
 
+static const char httpnull_webp[] =
+  "RIFF" /* header */
+  "\x22\x00\x00\x00" /* file size */
+  "WEBP" /* fourCC */
+  "VP8\x20" /* chunk header */
+  "\x16\x00\x00\x00"
+  "\x30\x01\x00\x9d"
+  "\x01\x2a\x01\x00\x01\x00\x0e\xc0"
+  "\xfe\x25\xa4\x00\x03\x70\x00\x00"
+  "\x00\x00";
+
 /* ------------------------------------------------------------------------- */
 
 typedef struct mime {
@@ -145,6 +156,7 @@ static const mime_t default_mimes[] = {
   { "gif", 3, "image/gif", SEND_GIF, httpnull_gif, sizeof(httpnull_gif) - 1},
   { "png", 3, "image/png", SEND_PNG, httpnull_png, sizeof(httpnull_png) - 1},
   { "jp", 2, "image/jpeg", SEND_JPG, httpnull_jpg, sizeof(httpnull_jpg) - 1},
+  { "webp", 4, "image/webp", SEND_WEBP, httpnull_webp, sizeof(httpnull_webp) - 1},
   { "swf", 3, "application/x-shockwave-flash", SEND_SWF, httpnull_swf, sizeof(httpnull_swf) - 1},
   { "ico", 3, "image/x-icon", SEND_ICO, httpnull_ico, sizeof(httpnull_ico) - 1},
   { "htm", 3, "text/html", SEND_HTML, NULL, 0},

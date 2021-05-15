@@ -1,9 +1,10 @@
 OPTS	:= -O2
-#-O0 -g -ggdb
-CFLAGS	+= -Isrc -std=c99 -Wall -Wextra -ffunction-sections -fdata-sections -fno-strict-aliasing
+CFLAGS	+= -Isrc -std=c99 -Wall -Wextra -fdata-sections -ffunction-sections -fno-strict-aliasing -fPIC -fno-exceptions
 LDFLAGS	+= -Wl,--gc-sections -lrt
 SFLAGS	:= -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag
-STRIP	?= strip
+
+CC	?= $(CROSS_COMPILE)cc
+STRIP	?= $(CROSS_COMPILE)strip
 
 SOURCES	:= $(wildcard src/*.c)
 OBJECTS	:= $(patsubst %.c,%.o,$(SOURCES))
@@ -16,7 +17,7 @@ endif
 all: $(OBJECTS) $(TARGETS)
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(LDFLAGS) $(OPTS) -c -o $@ $<
+	$(CC) $(CFLAGS) $(OPTS) -c -o $@ $<
 
 $(TARGETS): $(OBJECTS)
 	$(CC) $(CFLAGS) $(OPTS) -o $@ $@.c $^ $(LDFLAGS)

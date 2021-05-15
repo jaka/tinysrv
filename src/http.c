@@ -273,7 +273,7 @@ int http_header_setvalue(ps_http_response_header_t *header, const unsigned int k
   return -1;
 }
 
-int http_header_fill(ps_http_response_header_t *header, char *buffer, int buflen) {
+int http_header_fill(ps_http_response_header_t *header, char *buffer, __attribute__((unused)) int buflen) {
 
   int index;
   int header_length;

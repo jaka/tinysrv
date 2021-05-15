@@ -285,6 +285,9 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
       return -1;
 
   }
+#else
+  (void)sock;
+  (void)ssl;
 #endif /* USE_SSL */
 
   return recv(fd, buf, buflen, 0);
@@ -298,6 +301,11 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   char content_length[11];
   off_t offset;
   int flags;
+
+#ifndef USE_SSL
+  (void)sock;
+  (void)ssl;
+#endif /* USE_SSL */
 
   if ( connection->length > -1 ) {
     sprintf(content_length, "%d", connection->length);

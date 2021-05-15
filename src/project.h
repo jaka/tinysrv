@@ -29,6 +29,7 @@ typedef enum {
   SEND_HTML,
   SEND_ICO,
   SEND_JPG,
+  SEND_WEBP,
   SEND_JS,
   SEND_PNG,
   SEND_SWF,
