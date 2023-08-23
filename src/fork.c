@@ -9,6 +9,8 @@
 #include <syslog.h> /* openlog(), syslog() */
 #include <unistd.h> /* fork() */
 
+struct fork_process_s *process_list;
+
 int subprocess_init(void) {
 
   process_list = NULL;

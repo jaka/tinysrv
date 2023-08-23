@@ -10,8 +10,6 @@ struct fork_process_s {
   struct fork_process_s *next;
 };
 
-struct fork_process_s *process_list;
-
 int subprocess_init(void);
 int subprocess_quit(void);
 int subprocess_add(int (*)(void *), void *);
