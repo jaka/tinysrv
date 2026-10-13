@@ -6,12 +6,14 @@
 
 static void ts_socket_load_defaults(ts_socket_t *sock)
 {
+  sock->sockfd = -1;
   sock->ipaddr = NULL;
   sock->port = NULL;
   sock->options = DO_204 | DO_REDIRECT;
   sock->serve_path_length = 0;
   sock->serve_path = NULL;
   sock->cert_path = NULL;
+  sock->next = NULL;
 }
 
 static ts_socket_t *ts_socket_new(void)
@@ -62,6 +64,7 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
   ts_socket_t *cur_socket;
 
   cur_socket = ts_socket_new();
+  if (!cur_socket) return -1;
 
   /* Process command line arguments. */
   error = 0;
@@ -157,7 +160,10 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
       if (cur_socket->ipaddr) free(cur_socket->ipaddr);
       cur_socket->ipaddr = strdup(argv[i]);
 
-      if (!cur_socket->port) return -1;
+      if (!cur_socket->port) {
+        error = 1;
+        continue;
+      }
       if (!cur_socket->cert_path) cur_socket->options &= ~DO_SSL;
 
       /* Update global configuration list */
@@ -166,6 +172,10 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
 
       /* Create new configuration. */
       cur_socket = ts_socket_new();
+      if (!cur_socket) {
+        error = 1;
+        continue;
+      }
     }
   }
 

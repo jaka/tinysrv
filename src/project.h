@@ -5,7 +5,6 @@
 #define DEBUG
 */
 #define FORK
-#define _GNU_SOURCE
 
 #include "debug.h"
 
@@ -13,14 +12,9 @@
 #define DEFAULT_PORT "8000"
 #define CHAR_BUF_SIZE 8192
 #define MAX_PATH_LENGTH 200
+#define POST_DRAIN_TIMEOUT 1
 
 #define TS_BACKLOG SOMAXCONN
-
-#ifndef SO_REUSEPORT
-#define TS_SOL_SOCKET SO_REUSEADDR
-#else
-#define TS_SOL_SOCKET SO_REUSEADDR | SO_REUSEPORT
-#endif
 
 typedef enum {
   SEND_CSS,

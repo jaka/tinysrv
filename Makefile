@@ -1,5 +1,5 @@
 OPTS	:= -O2
-CFLAGS	+= -Isrc -std=c99 -Wall -Wextra -fdata-sections -ffunction-sections -fno-strict-aliasing -fPIC -fno-exceptions
+CFLAGS	+= -D_GNU_SOURCE -Isrc -std=c99 -Wall -Wextra -fdata-sections -ffunction-sections -fno-strict-aliasing -fPIC -fno-exceptions
 LDFLAGS	+= -Wl,--gc-sections -lrt
 SFLAGS	:= -s -R .comment -R .gnu.version -R .note -R .note.ABI-tag
 

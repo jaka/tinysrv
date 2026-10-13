@@ -14,6 +14,7 @@
 #include <arpa/inet.h> /* inet_ntop */
 #include <errno.h>
 #include <fcntl.h>       /* F_SETFL, F_GETFL, fcntl() */
+#include <grp.h>         /* initgroups() */
 #include <netdb.h>       /* freeaddrinfo */
 #include <netinet/tcp.h> /* SOL_TCP, TCP_NODELAY */
 #include <pwd.h>         /* getpwnam() */
@@ -69,7 +70,10 @@ static int ts_bind(ts_socket_t *sock)
         continue;
       }
 
-      if (setsockopt(sockfd, SOL_SOCKET, TS_SOL_SOCKET, &yes, sizeof(int)) ||
+      if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) ||
+#ifdef SO_REUSEPORT
+          setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) ||
+#endif
           setsockopt(sockfd, SOL_TCP, TCP_NODELAY, &yes, sizeof(int)) ||
           bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) ||
           listen(sockfd, TS_BACKLOG)) {
@@ -115,6 +119,7 @@ static int ts_listen(ts_socket_t *sock)
   nfds = 0;
   FD_ZERO(&readfds);
   for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
+    if (cur_sock->sockfd < 0) continue;
     FD_SET(cur_sock->sockfd, &readfds);
     if (cur_sock->sockfd > nfds) nfds = cur_sock->sockfd;
   }
@@ -146,9 +151,11 @@ static int ts_listen(ts_socket_t *sock)
 
     sockfd = 0;
     for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
+      if (cur_sock->sockfd < 0) continue;
       if (FD_ISSET(cur_sock->sockfd, &selectfds)) {
         sockfd = cur_sock->sockfd;
         select_rv--;
+        FD_CLR(cur_sock->sockfd, &selectfds);
         break;
       }
     }
@@ -190,9 +197,19 @@ int ts_main_loop(void *arg)
   }
 
   /* Change user. */
-  if (config->pw != NULL && setuid(config->pw->pw_uid)) {
-    syslog(LOG_WARNING, "setuid %d: %m", config->pw->pw_uid);
-    return 1;
+  if (config->pw != NULL) {
+    if (initgroups(config->pw->pw_name, config->pw->pw_gid) < 0) {
+      syslog(LOG_WARNING, "initgroups %s: %m", config->pw->pw_name);
+      return 1;
+    }
+    if (setgid(config->pw->pw_gid) < 0) {
+      syslog(LOG_WARNING, "setgid %d: %m", config->pw->pw_gid);
+      return 1;
+    }
+    if (setuid(config->pw->pw_uid) < 0) {
+      syslog(LOG_WARNING, "setuid %d: %m", config->pw->pw_uid);
+      return 1;
+    }
   }
 
 #ifdef USE_SSL
@@ -202,25 +219,20 @@ int ts_main_loop(void *arg)
 
   ts_listen(config->sock);
 
+  syslog(LOG_INFO, "Received termination signal. Shutting down server.");
+
   return 0;
 }
 
 static void signal_handler(int signum)
 {
-  if (signum == SIGINT || signum == SIGTERM) {
-
-    syslog(LOG_INFO, "Received termination signal. Shutting down server.");
-    terminated = 1;
-
-    if (signum == SIGTERM) signal(SIGTERM, SIG_IGN);
-    else if (signum == SIGINT) signal(SIGINT, SIG_IGN);
-  }
+  if (signum == SIGINT || signum == SIGTERM) terminated = 1;
 }
 
 int main(int argc, char **argv)
 {
   int pidfd;
-  char pid[11];
+  char pid[16];
   uid_t uid;
   struct sigaction sa;
   ts_configuration_t *config;
@@ -256,6 +268,7 @@ int main(int argc, char **argv)
 
   if (ts_configuration_parse(config, argc, argv) < 0) {
     fprintf(stderr, "ERROR: Invalid arguments!\n");
+    ts_configuration_free(config);
     exit(EXIT_FAILURE);
   }
 
@@ -267,7 +280,7 @@ int main(int argc, char **argv)
   openlog(PROGRAM_NAME, config->log_option, LOG_DAEMON);
 
   /* Open lockfile. */
-  pidfd = 0;
+  pidfd = -1;
   if (config->pidfile != NULL) {
     pidfd = open(config->pidfile, O_RDWR | O_CREAT, 0644);
     if (pidfd < 0) {
@@ -281,9 +294,10 @@ int main(int argc, char **argv)
     }
   }
 
-  if (pidfd > 0) {
-    sprintf(pid, "%d\n", getpid());
-    write(pidfd, pid, strlen(pid));
+  if (pidfd >= 0) {
+    int pid_length = snprintf(pid, sizeof(pid), "%d\n", getpid());
+    if (ftruncate(pidfd, 0) < 0 || (pid_length > 0 && write(pidfd, pid, pid_length) != pid_length))
+      syslog(LOG_WARNING, "Could not write PID file %s: %m", config->pidfile);
   }
 
   /* Handle things for changing user. */
@@ -292,7 +306,8 @@ int main(int argc, char **argv)
     uid = getuid();
     config->pw = getpwnam(config->user);
     if (!config->pw) {
-      syslog(LOG_WARNING, "Unknown user \"%s\"", config->user);
+      syslog(LOG_ERR, "Unknown user \"%s\", exiting.", config->user);
+      exit(EXIT_FAILURE);
     }
     else if (uid != config->pw->pw_uid && uid) {
       syslog(LOG_WARNING, "Root access is required to change user!");
@@ -309,7 +324,7 @@ int main(int argc, char **argv)
   ts_main_loop((void *)config);
 #endif
 
-  if (pidfd > 0) {
+  if (pidfd >= 0) {
     close(pidfd);
     unlink(config->pidfile);
   }

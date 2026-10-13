@@ -1,7 +1,9 @@
 #ifndef _FORK_H
 #define _FORK_H
 
-extern volatile int terminated;
+#include <signal.h>
+
+extern volatile sig_atomic_t terminated;
 
 struct fork_process_s {
   int pid;

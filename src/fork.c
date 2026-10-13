@@ -47,10 +47,7 @@ int subprocess_add(int (*fn)(void *), void *arg)
 
 static void subprocess_signal_handler(int signum)
 {
-  if (signum == SIGTERM) {
-    syslog(LOG_INFO, "Received termination signal. Shutting down subprocess.");
-    terminated = 1;
-  }
+  if (signum == SIGTERM) terminated = 1;
 }
 
 static int subprocess_setup_signal_handler(void)
@@ -61,7 +58,7 @@ static int subprocess_setup_signal_handler(void)
   sigemptyset(&sa.sa_mask);
 
   sa.sa_flags = SA_RESTART;
-  if (sigaction(SIGSEGV, &sa, NULL) < 0 || sigaction(SIGTERM, &sa, NULL) < 0) {
+  if (sigaction(SIGTERM, &sa, NULL) < 0) {
     syslog(LOG_WARNING, "Signal handler could not be set: %m.");
     return -1;
   }

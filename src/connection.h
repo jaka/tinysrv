@@ -5,9 +5,11 @@
 #include "http.h"
 #include "project.h"
 
+#include <sys/types.h>
+
 struct ts_connection {
   const char *str;
-  int length;
+  off_t length;
   int filefd;
   ps_http_request_header_t *request;
   ps_http_response_header_t *response;

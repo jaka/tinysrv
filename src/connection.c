@@ -12,6 +12,7 @@
 #include <string.h>       /* strcasestr() */
 #include <sys/sendfile.h> /* sendfile() */
 #include <sys/stat.h>     /* struct stat */
+#include <time.h>         /* time() */
 #include <unistd.h>       /* close() */
 
 static const mime_t *get_mime(char *ext)
@@ -30,17 +31,64 @@ static const mime_t *get_mime(char *ext)
   ar_mimes = &default_mimes[0];
 
   for (i = 0; ar_mimes[i].ext; i++) {
-    if (!strncasecmp(ext, ar_mimes[i].ext, ar_mimes[i].ext_len)) return &ar_mimes[i];
+    if (!strncasecmp(ext, ar_mimes[i].ext, ar_mimes[i].ext_len) && !ext[ar_mimes[i].ext_len]) return &ar_mimes[i];
   }
 
   /* Return last mime: SEND_UNK_EXT. */
   return &ar_mimes[i];
 }
 
+/* Open `rel` beneath `base`, refusing to follow symlinks in any component. */
+static int open_nofollow(const char *base, const char *rel, struct stat *st)
+{
+  char *path, *p, *slash;
+  int dirfd, fd;
+
+  dirfd = open(base, O_RDONLY | O_DIRECTORY);
+  if (dirfd < 0) return -1;
+
+  path = strdup(rel);
+  if (!path) {
+    close(dirfd);
+    return -1;
+  }
+
+  fd = -1;
+  p = path;
+  while (*p) {
+
+    while (*p == '/') p++;
+    if (!*p) break;
+
+    slash = strchr(p, '/');
+    if (slash) *slash = 0;
+
+    if (slash) {
+      int next = openat(dirfd, p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      close(dirfd);
+      dirfd = next;
+      if (dirfd < 0) break;
+      p = slash + 1;
+    }
+    else {
+      fd = openat(dirfd, p, O_RDONLY | O_NOFOLLOW);
+      if (fd >= 0 && (fstat(fd, st) < 0 || (st->st_mode & S_IFMT) != S_IFREG)) {
+        close(fd);
+        fd = -1;
+      }
+      break;
+    }
+  }
+
+  if (dirfd >= 0) close(dirfd);
+  free(path);
+  return fd;
+}
+
 static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const char *filename)
 {
   char file[MAX_PATH_LENGTH];
-  char *hostname;
+  char *hostname, *rel;
   unsigned int hostname_length, filename_length, length;
   int fd;
   struct stat st;
@@ -86,6 +134,7 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
     if (*(sock->serve_path + sock->serve_path_length - 1) != '/')
       strcat(file, "/");
   }
+  rel = file + strlen(file);
   strcat(file, hostname);
   strcat(file, filename);
 
@@ -93,14 +142,11 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
 
   DEBUG_PRINT("Requested local file: %s", file);
 
-  /* Check if file exists and it is a regular file. */
-  fd = 0;
-  if (!stat(file, &st) && (st.st_mode & S_IFMT) == S_IFREG) {
-    connection->length = st.st_size;
-    fd = open(file, O_RDONLY);
-  }
+  /* Open the file beneath the serve path, refusing to follow symlinks. */
+  fd = open_nofollow(sock->serve_path, rel, &st);
+  if (fd >= 0) connection->length = st.st_size;
 
-  if (fd) {
+  if (fd >= 0) {
     connection->response->status_code = 200;
     switch (connection->request->method) {
       case HTTP_METHOD_GET:
@@ -122,7 +168,7 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
 
 static int handle_redirect(ps_connection_t *connection)
 {
-  char *query, *referer, *url;
+  char *query, *referer, *url, *p;
   char *decoded_query;
 
   query = connection->request->query;
@@ -143,6 +189,14 @@ static int handle_redirect(ps_connection_t *connection)
 
   url = strstr_last(decoded_query, "http://");
   if (!url) url = strstr_last(decoded_query, "https://");
+
+  /* Reject control characters (e.g. CR/LF) to prevent header/response splitting. */
+  if (url) {
+    for (p = url; *p; p++) {
+      if ((unsigned char)*p < 0x20 || (unsigned char)*p == 0x7f) break;
+    }
+    if (*p) url = NULL;
+  }
 
   if (url) {
     referer = http_header_getvalue(connection->request, HEADER_REFERER);
@@ -168,8 +222,8 @@ static int handle_jsclose(ps_connection_t *connection, const mime_t *mime)
   char *accept;
 
   cont = 0;
-  /* We return JSCLOSE if file extension is htm. */
-  if (mime->ext && !strcmp(mime->ext, "htm")) cont = 1;
+  /* We return JSCLOSE if file extension is htm or html. */
+  if (mime->ext && (!strcmp(mime->ext, "htm") || !strcmp(mime->ext, "html"))) cont = 1;
   /* Or if Mimetype is unknown. */
   else if (!mime->ext_len) {
     accept = http_header_getvalue(connection->request, HEADER_ACCEPT);
@@ -273,7 +327,7 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   char response_buffer[CHAR_BUF_SIZE];
   int response_buffer_size;
   int size;
-  char content_length[11];
+  char content_length[21];
   off_t offset;
   int flags;
 
@@ -283,7 +337,7 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
 #endif /* USE_SSL */
 
   if (connection->length > -1) {
-    sprintf(content_length, "%d", connection->length);
+    snprintf(content_length, sizeof(content_length), "%lld", (long long)connection->length);
     http_header_setvalue(connection->response, HEADER_CONTENT_LENGTH, content_length);
   }
 
@@ -291,9 +345,12 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   if (connection->length > 0) flags |= MSG_MORE;
 
   /* Output header. */
-  response_buffer_size = http_header_fill(connection->response, response_buffer, sizeof(response_buffer) - 1);
+  response_buffer_size = http_header_fill(connection->response, response_buffer, sizeof(response_buffer));
   DEBUG_PRINT("Header length: %d.", response_buffer_size);
-  if (response_buffer_size < 0) return -1;
+  if (response_buffer_size < 0) {
+    if (connection->filefd >= 0) close(connection->filefd);
+    return -1;
+  }
 
 #ifdef USE_SSL
   if (sock->options & DO_SSL)
@@ -302,7 +359,12 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
 #endif /* USE_SSL */
     size = send(fd, response_buffer, response_buffer_size, flags);
 
-  if (connection->filefd > 0) {
+  if (size < 0) {
+    if (connection->filefd >= 0) close(connection->filefd);
+    return -1;
+  }
+
+  if (connection->filefd >= 0) {
 
 #ifdef USE_SSL
     if (sock->options & DO_SSL) {
@@ -313,7 +375,7 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
     {
       /* Output file hander content. */
       offset = 0;
-      size += sendfile(fd, connection->filefd, &offset, connection->length);
+      size += sendfile(fd, connection->filefd, &offset, (size_t)connection->length);
     }
 
     close(connection->filefd);
@@ -322,10 +384,10 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
 #ifdef USE_SSL
     /* Output constant buffer. */
     if (sock->options & DO_SSL)
-      size += SSL_write(ssl->s, connection->str, connection->length);
+      size += SSL_write(ssl->s, connection->str, (int)connection->length);
     else
 #endif /* USE_SSL */
-      size += send(fd, connection->str, connection->length, MSG_NOSIGNAL);
+      size += send(fd, connection->str, (size_t)connection->length, MSG_NOSIGNAL);
   }
 
   return size;
@@ -341,7 +403,7 @@ int connection_new(ts_socket_t *sock, int fd)
   ps_http_response_header_t response_header;
   char request_buffer[CHAR_BUF_SIZE];
   int request_buffer_size;
-  struct ts_ssl ssl;
+  struct ts_ssl ssl = {0};
   ps_connection_t connection;
 
   /*
@@ -353,6 +415,9 @@ int connection_new(ts_socket_t *sock, int fd)
   if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
     return -1;
   }
+  if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
+    return -1;
+  }
 
   yes = 1;
   setsockopt(fd, IPPROTO_TCP, TCP_CORK, (void *)&yes, sizeof(yes));
@@ -360,7 +425,7 @@ int connection_new(ts_socket_t *sock, int fd)
   /* Create new connection. */
   connection.str = NULL;
   connection.length = -1;
-  connection.filefd = 0;
+  connection.filefd = -1;
   connection.request = &request_header;
   connection.response = &response_header;
 
@@ -382,11 +447,17 @@ int connection_new(ts_socket_t *sock, int fd)
       request_buffer[request_buffer_size] = 0;
 
       http_error = 0;
+      request_header.method = HTTP_METHOD_UNKNOWN;
       request_header.filename = NULL;
       http_header_parse(&request_header, request_buffer, &http_error);
 
       if (request_header.method == HTTP_METHOD_POST) {
-        /* Socket may still be opened for reading, so read any data that is still waiting for us. */
+        /*
+        Socket may still be opened for reading, so read any data that is still waiting for us.
+        Bound the drain by wall-clock time so a client trickling bytes cannot hold the
+        single worker indefinitely.
+        */
+        time_t drain_deadline = time(NULL) + POST_DRAIN_TIMEOUT;
         do {
 #ifdef USE_SSL
           if (sock->options & DO_SSL)
@@ -394,7 +465,7 @@ int connection_new(ts_socket_t *sock, int fd)
           else
 #endif /* USE_SSL */
             request_buffer_size = recv(fd, request_buffer, sizeof(request_buffer) - 1, 0);
-        } while (request_buffer_size > 0);
+        } while (request_buffer_size > 0 && time(NULL) < drain_deadline);
       }
 
       response_header.version = HTTP_VERSION_10;

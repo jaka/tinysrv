@@ -77,11 +77,13 @@ free_all:
   return rv;
 }
 
-int ts_ssl_sendfile(SSL *s, int filefd, int filesize)
+int ts_ssl_sendfile(SSL *s, int filefd, off_t filesize)
 {
   unsigned char *p, *buf;
-  int remaining_size, len;
-  int rv;
+  off_t remaining_size;
+  int len, rv;
+
+  if (filesize <= 0) return 0;
 
   buf = mmap(0, (size_t)filesize, PROT_READ, MAP_PRIVATE, filefd, 0);
 
@@ -93,7 +95,7 @@ int ts_ssl_sendfile(SSL *s, int filefd, int filesize)
       if (remaining_size > MAX_SEND_BUFFER_SIZE)
         len = MAX_SEND_BUFFER_SIZE;
       else
-        len = remaining_size;
+        len = (int)remaining_size;
 
       rv = SSL_write(s, p, len);
       if (rv != len) break;
@@ -130,11 +132,21 @@ int ts_ssl_session_init(struct ts_ssl *ssl, int fd)
 
 int ts_ssl_session_close(struct ts_ssl *ssl)
 {
-  SSL_set_shutdown(ssl->s, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
+  if (!ssl) return -1;
 
-  SSL_free(ssl->s);
-  if (ssl->subcontext != NULL) SSL_CTX_free(ssl->subcontext);
-  SSL_CTX_free(ssl->context);
+  if (ssl->s) {
+    SSL_set_shutdown(ssl->s, SSL_SENT_SHUTDOWN | SSL_RECEIVED_SHUTDOWN);
+    SSL_free(ssl->s);
+    ssl->s = NULL;
+  }
+  if (ssl->subcontext != NULL) {
+    SSL_CTX_free(ssl->subcontext);
+    ssl->subcontext = NULL;
+  }
+  if (ssl->context != NULL) {
+    SSL_CTX_free(ssl->context);
+    ssl->context = NULL;
+  }
   return 0;
 }
 

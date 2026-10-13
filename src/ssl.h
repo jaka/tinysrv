@@ -9,6 +9,7 @@
 
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <sys/types.h>
 
 struct ts_ssl {
   SSL *s;
@@ -20,7 +21,7 @@ struct ts_ssl {
 
 int ts_ssl_session_init(struct ts_ssl *, int);
 int ts_ssl_session_close(struct ts_ssl *);
-int ts_ssl_sendfile(SSL *, int, int);
+int ts_ssl_sendfile(SSL *, int, off_t);
 
 #else
 

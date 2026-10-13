@@ -75,6 +75,7 @@ static unsigned int http_header_parse_connection(const char *str, const unsigned
           connection |= HTTP_CONNECTION_KEEPALIVE;
           str += 10;
         }
+        else str++;
         break;
 
       case 'C':
@@ -84,15 +85,17 @@ static unsigned int http_header_parse_connection(const char *str, const unsigned
           connection &= ~HTTP_CONNECTION_KEEPALIVE;
           str += 5;
         }
+        else str++;
         break;
 
       case 'U':
       case 'u':
-        if (!strncasecmp(str, "upgrade", 5)) {
+        if (!strncasecmp(str, "upgrade", 7)) {
           DEBUG_PRINT("Connection: upgrade.");
           connection |= HTTP_CONNECTION_UPGRADE;
           str += 7;
         }
+        else str++;
         break;
 
       case ' ':
@@ -186,14 +189,9 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   /* Parse connection field. */
   for (str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n")) {
 
-    if (strncasecmp(str, "Conn", 4)) continue;
+    if (strncasecmp(str, "Connection", 10)) continue;
     str += 10;
     line_length -= 10;
-
-    while (*str && *str != ':' && line_length > 0) {
-      str++;
-      line_length--;
-    }
 
     if (*str != ':') continue;
     str++;
@@ -223,15 +221,10 @@ char *http_header_getvalue(ps_http_request_header_t *header, const unsigned int 
   line = header->header_start;
   for (str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n")) {
 
-    if (strncasecmp(str, http_field_keys[index].key, http_field_keys[index].short_key_length))
+    if (strncasecmp(str, http_field_keys[index].key, http_field_keys[index].key_length))
       continue;
-    str += strlen(http_field_keys[index].key);
-    line_length -= strlen(http_field_keys[index].key);
-
-    while (*str && *str != ':' && line_length > 0) {
-      str++;
-      line_length--;
-    }
+    str += http_field_keys[index].key_length;
+    line_length -= http_field_keys[index].key_length;
 
     if (*str != ':') continue;
     str++;
@@ -253,40 +246,49 @@ int http_header_setvalue(ps_http_response_header_t *header, const unsigned int k
   int index;
 
   if (!value) return -1;
+  /* Never allow CR/LF in a header value (header/response splitting). */
+  if (strpbrk(value, "\r\n")) return -1;
 
   index = http_header_field_getindex(key_index);
-  if (index) {
-    if (header->field[index]) free(header->field[index]);
-    header->field[index] = strdup(value);
-    return 0;
-  }
-  return -1;
+  if (index >= (int)HTTP_HEADER_FIELDS) return -1;
+
+  if (header->field[index]) free(header->field[index]);
+  header->field[index] = strdup(value);
+  return header->field[index] ? 0 : -1;
 }
 
-int http_header_fill(ps_http_response_header_t *header, char *buffer, __attribute__((unused)) int buflen)
+int http_header_fill(ps_http_response_header_t *header, char *buffer, int buflen)
 {
-  int index;
-  int header_length;
+  int index, len, offset, remaining;
   const ps_http_status_t *http_status;
-  const char *sptr;
 
-  sptr = http_version_getstr(header->version);
+  if (!buffer || buflen <= 0) return -1;
 
-  strcpy(buffer, sptr);
-  header_length = strlen(sptr);
+  offset = 0;
+  remaining = buflen;
 
-  *(buffer + header_length) = ' ';
-  header_length++;
+  len = snprintf(buffer + offset, remaining, "%s ", http_version_getstr(header->version));
+  if (len < 0 || len >= remaining) return -1;
+  offset += len;
+  remaining -= len;
 
   http_status = http_header_get_status(header->status_code);
-  header_length += sprintf(buffer + header_length, "%d %s\r\n", http_status->status_code, http_status->status_msg);
+  len = snprintf(buffer + offset, remaining, "%d %s\r\n", http_status->status_code, http_status->status_msg);
+  if (len < 0 || len >= remaining) return -1;
+  offset += len;
+  remaining -= len;
 
   for (index = 0; http_field_keys[index].key; index++) {
-    if (header->field[index])
-      header_length += sprintf(buffer + header_length, "%s: %s\r\n", http_field_keys[index].key, header->field[index]);
+    if (!header->field[index]) continue;
+    len = snprintf(buffer + offset, remaining, "%s: %s\r\n", http_field_keys[index].key, header->field[index]);
+    if (len < 0 || len >= remaining) return -1;
+    offset += len;
+    remaining -= len;
   }
-  strcpy(buffer + header_length, "\r\n");
-  header_length += 2;
 
-  return header_length;
+  len = snprintf(buffer + offset, remaining, "\r\n");
+  if (len < 0 || len >= remaining) return -1;
+  offset += len;
+
+  return offset;
 }
