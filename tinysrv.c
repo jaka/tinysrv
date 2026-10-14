@@ -27,11 +27,41 @@
 
 volatile sig_atomic_t terminated;
 
+static const struct {
+  unsigned int flag;
+  const char *name;
+} ts_option_names[] = {
+    {DO_204, "204"},
+    {DO_REDIRECT, "REDIR"},
+    {DO_SSL, "SSL"},
+    {DO_CLOSE, "CLOSE"},
+    {DO_FILES, "FILES"},
+};
+
+static char *ts_options_str(unsigned int options, char *buf, size_t buflen)
+{
+  unsigned int i;
+  size_t len;
+
+  if (!buflen) return buf;
+
+  len = 0;
+  buf[0] = 0;
+  for (i = 0; i < sizeof(ts_option_names) / sizeof(ts_option_names[0]) && len + 1 < buflen; i++) {
+    if (!(options & ts_option_names[i].flag)) continue;
+    len += snprintf(buf + len, buflen - len, "%s%s", len ? "|" : "", ts_option_names[i].name);
+  }
+  if (!len) snprintf(buf, buflen, "none");
+
+  return buf;
+}
+
 static int ts_bind(ts_socket_t *sock)
 {
   struct addrinfo hints, *servinfo, *servinfo_base;
   struct sockaddr_in *ipv4;
   ts_socket_t *cur_sock;
+  char optbuf[64];
   int rv, sockfd, success, yes;
 
   memset(&hints, 0, sizeof(hints));
@@ -84,7 +114,7 @@ static int ts_bind(ts_socket_t *sock)
 
       cur_sock->sockfd = sockfd;
       success++;
-      syslog(LOG_INFO, "Listening on address %s and port %s with options: %d.", cur_sock->ipaddr, cur_sock->port, cur_sock->options);
+      syslog(LOG_INFO, "Listening on address %s and port %s with options: %s.", cur_sock->ipaddr, cur_sock->port, ts_options_str(cur_sock->options, optbuf, sizeof(optbuf)));
       break;
     }
 
@@ -111,6 +141,13 @@ static int ts_listen(ts_socket_t *sock)
     if (cur_sock->sockfd > nfds) nfds = cur_sock->sockfd;
   }
 
+#ifdef FORK
+  if (subprocess_death_fd >= 0) {
+    FD_SET(subprocess_death_fd, &readfds);
+    if (subprocess_death_fd > nfds) nfds = subprocess_death_fd;
+  }
+#endif
+
   nfds++;
 
   select_rv = 0;
@@ -135,6 +172,14 @@ static int ts_listen(ts_socket_t *sock)
         continue;
       }
     }
+
+#ifdef FORK
+    if (subprocess_death_fd >= 0 && FD_ISSET(subprocess_death_fd, &selectfds)) {
+      DEBUG_PRINT("Supervisor exited, shutting down worker.");
+      terminated = 1;
+      continue;
+    }
+#endif
 
     ready = NULL;
     for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
@@ -223,18 +268,20 @@ static void signal_handler(int signum)
 
 int main(int argc, char **argv)
 {
-  int pidfd;
+  int pidfd = -1;
+  int pid_locked = 0;
+  int ret = EXIT_FAILURE;
   char pid[16];
   uid_t uid;
   struct sigaction sa;
-  ts_configuration_t *config;
+  ts_configuration_t *config = NULL;
 
   if (argc == 2 && !strcmp(argv[1], "-v")) {
     printf("tinysrv, built with:\n");
-#if DEBUG
+#ifdef DEBUG
     printf("* DEBUG\n");
 #endif
-#if USE_SSL
+#ifdef USE_SSL
     printf("* USE_SSL\n");
 #endif
     return EXIT_SUCCESS;
@@ -246,7 +293,7 @@ int main(int argc, char **argv)
   sigemptyset(&sa.sa_mask);
   if (sigaction(SIGINT, &sa, NULL) < 0 || sigaction(SIGTERM, &sa, NULL) < 0) {
     fprintf(stderr, "ERROR: Signal handler could not be set!\n");
-    exit(EXIT_FAILURE);
+    goto cleanup;
   }
 
   /* Configuration. */
@@ -255,35 +302,34 @@ int main(int argc, char **argv)
   config = ts_configuration_create();
   if (!config) {
     fprintf(stderr, "ERROR: Cannot create configuration struct!\n");
-    exit(EXIT_FAILURE);
+    goto cleanup;
   }
 
   if (ts_configuration_parse(config, argc, argv) < 0) {
     fprintf(stderr, "ERROR: Invalid arguments!\n");
-    ts_configuration_free(config);
-    exit(EXIT_FAILURE);
+    goto cleanup;
   }
 
   if (!config->do_foreground && daemon(1, 0)) {
     fprintf(stderr, "ERROR: Failed to daemonize, exiting: %m.\n");
-    exit(EXIT_FAILURE);
+    goto cleanup;
   }
 
   openlog(PROGRAM_NAME, config->log_option, LOG_DAEMON);
 
   /* Open lockfile. */
-  pidfd = -1;
   if (config->pidfile != NULL) {
     pidfd = open(config->pidfile, O_RDWR | O_CREAT, 0644);
     if (pidfd < 0) {
       syslog(LOG_ERR, "ERROR: Could not open PID file %s, exiting.", config->pidfile);
-      exit(EXIT_FAILURE);
+      goto cleanup;
     }
     /* Try to lock file. */
     if (lockf(pidfd, F_TLOCK, 0) < 0) {
       syslog(LOG_ERR, "ERROR: Could not lock PID file %s, exiting.", config->pidfile);
-      exit(EXIT_FAILURE);
+      goto cleanup;
     }
+    pid_locked = 1;
   }
 
   if (pidfd >= 0) {
@@ -299,11 +345,11 @@ int main(int argc, char **argv)
     config->pw = getpwnam(config->user);
     if (!config->pw) {
       syslog(LOG_ERR, "Unknown user \"%s\", exiting.", config->user);
-      exit(EXIT_FAILURE);
+      goto cleanup;
     }
     else if (uid != config->pw->pw_uid && uid) {
       syslog(LOG_WARNING, "Root access is required to change user!");
-      exit(EXIT_FAILURE);
+      goto cleanup;
     }
   }
 
@@ -316,13 +362,15 @@ int main(int argc, char **argv)
   ts_main_loop((void *)config);
 #endif
 
+  ret = EXIT_SUCCESS;
+
+cleanup:
   if (pidfd >= 0) {
+    if (pid_locked) unlink(config->pidfile);
     close(pidfd);
-    unlink(config->pidfile);
   }
-
-  ts_configuration_free(config);
-
+  if (config) ts_configuration_free(config);
   DEBUG_PRINT("Exit.");
-  return 0;
+  closelog();
+  return ret;
 }

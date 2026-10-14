@@ -16,6 +16,7 @@
 #endif
 
 struct fork_process_s *process_list;
+int subprocess_death_fd = -1;
 
 void subprocess_init(void)
 {
@@ -70,11 +71,29 @@ static int subprocess_setup_signal_handler(void)
   return 0;
 }
 
+static struct fork_process_s *subprocess_find(pid_t pid)
+{
+  struct fork_process_s *cur_process;
+
+  for (cur_process = process_list; cur_process; cur_process = cur_process->next) {
+    if (cur_process->pid == pid) return cur_process;
+  }
+
+  return NULL;
+}
+
 void subprocess_run(void)
 {
   struct fork_process_s *cur_process;
   int status;
+  int death_pipe[2];
   pid_t new_pid, pid;
+
+  if (pipe(death_pipe) < 0) {
+    syslog(LOG_WARNING, "pipe: %m.");
+    death_pipe[0] = death_pipe[1] = -1;
+  }
+  subprocess_death_fd = death_pipe[0];
 
   for (;;) {
 
@@ -85,6 +104,7 @@ void subprocess_run(void)
       /* Start subprocess. */
       new_pid = fork();
       if (!new_pid) {
+        if (death_pipe[1] >= 0) close(death_pipe[1]);
         signal(SIGINT, SIG_IGN);
         if (subprocess_setup_signal_handler() < 0) exit(EXIT_FAILURE);
         prctl(PR_SET_NAME, "worker", 0, 0, 0);
@@ -104,6 +124,10 @@ void subprocess_run(void)
     pid = waitpid(WAIT_ANY, &status, 0);
 
     if (pid > 0) {
+      /* Allow the dead subprocess to be started again. */
+      cur_process = subprocess_find(pid);
+      if (cur_process) cur_process->pid = 0;
+
       if (WIFEXITED(status)) {
         syslog(LOG_INFO, "PID %ld exited with code %d", (long)pid, WEXITSTATUS(status));
         if (WEXITSTATUS(status) == EXIT_FAILURE) terminated = 1;
@@ -111,6 +135,9 @@ void subprocess_run(void)
       else if (WIFSIGNALED(status)) {
         syslog(LOG_INFO, "PID %ld terminated by signal %d", (long)pid, WTERMSIG(status));
       }
+
+      /* Throttle respawns to avoid a tight crash loop. */
+      if (!terminated) sleep(1);
     }
     else if (pid == -1) {
       if (errno == EINTR && terminated) {
@@ -121,13 +148,16 @@ void subprocess_run(void)
 
     if (terminated) {
       DEBUG_PRINT("Kill all running subprocesses.");
-      for (cur_process = process_list; cur_process; cur_process = cur_process->next)
+      for (cur_process = process_list; cur_process; cur_process = cur_process->next) {
         if (cur_process->pid > 0) {
           kill(cur_process->pid, SIGTERM);
           cur_process->pid = 0;
         }
+      }
       /* Reap remaining children */
       while ((pid = waitpid(-1, NULL, 0)) > 0);
+      if (death_pipe[0] >= 0) close(death_pipe[0]);
+      if (death_pipe[1] >= 0) close(death_pipe[1]);
       break;
     }
   }

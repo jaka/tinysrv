@@ -100,6 +100,8 @@ static const ps_http_status_t http_statuses[] = {
     {204, "No Content"},
     {307, "Temporary Redirect"},
     {400, "Bad Request"},
+    {403, "Forbidden"},
+    {404, "Not Found"},
     {501, "Method Not Implemented"},
     {0, NULL}};
 

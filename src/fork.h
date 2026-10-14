@@ -4,6 +4,7 @@
 #include <signal.h>
 
 extern volatile sig_atomic_t terminated;
+extern int subprocess_death_fd;
 
 struct fork_process_s {
   int pid;

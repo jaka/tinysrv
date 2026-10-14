@@ -4,6 +4,7 @@
 #include "utils.h"
 
 #include <arpa/inet.h>   /* recv(), send(), SOL_SOCKET */
+#include <ctype.h>       /* tolower() */
 #include <errno.h>       /* errno */
 #include <fcntl.h>       /* O_RDONLY */
 #include <netinet/tcp.h> /* TCP_CORK */
@@ -76,7 +77,7 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
 static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const char *filename)
 {
   char file[MAX_PATH_LENGTH];
-  char *hostname, *rel, *port;
+  char *hostname, *rel, *port, *strp;
   int fd;
   struct stat st;
 
@@ -91,6 +92,14 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
 
   port = strchr(hostname, ':');
   if (port) *port = 0;
+
+  if (!*hostname) {
+    free(hostname);
+    return -1;
+  }
+
+  /* Host names are case-insensitive, so map them to directories in lower case. */
+  for (strp = hostname; *strp; strp++) *strp = tolower((unsigned char)*strp);
 
   if (change_dots_to_underscore(hostname) < 0) {
     free(hostname);
@@ -178,8 +187,8 @@ static int handle_redirect(ps_connection_t *connection)
   }
 
   if (url) {
-    http_header_setvalue(connection->response, HEADER_LOCATION, url);
-    connection->response->status_code = 307;
+    if (http_header_setvalue(connection->response, HEADER_LOCATION, url) < 0) url = NULL;
+    else connection->response->status_code = 307;
   }
 
   free(decoded_query);
@@ -206,7 +215,8 @@ static int handle_jsclose(ps_connection_t *connection, const mime_t *mime)
 
   if (!cont) return -1;
 
-  http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, "text/html");
+  if (http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, "text/html") < 0) return -1;
+
   connection->response->status_code = 200;
   connection->length = sizeof(content_jsclose) - 1;
   if (connection->request->method == HTTP_METHOD_GET) connection->str = content_jsclose;
@@ -241,16 +251,36 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
     return 0;
   }
 
-  http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, mime->typestr);
+  /* Serve a real file. */
+  if (sock->serve_path_length > 0 && is_safe_filename(filename) && !handle_file(connection, sock, filename)) {
+    if (http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, mime->typestr) < 0) {
+      if (connection->filefd >= 0) close(connection->filefd);
+      connection->filefd = -1;
+      connection->length = 0;
+      *error = 500;
+      return -1;
+    }
+    return 0;
+  }
 
-  if (sock->serve_path_length > 0 && is_safe_filename(filename) && !handle_file(connection, sock, filename)) return 0;
-
-  /* HTTP 307 Temporary Redirect for click counters. */
+  /* HTTP 307 Temporary Redirect for click counters (no content-type/body). */
   if ((sock->options & DO_REDIRECT) && !handle_redirect(connection)) return 0;
 
+  /* Serve JS close script. */
   if ((sock->options & DO_CLOSE) && !handle_jsclose(connection, mime)) return 0;
 
+  /* Serve files only: no empty/placeholder response. */
+  if (sock->options & DO_FILES) {
+    connection->response->status_code = 404;
+    connection->length = 0;
+    return 0;
+  }
+
   /* Dummy file. */
+  if (http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, mime->typestr) < 0) {
+    *error = 500;
+    return -1;
+  }
   if (mime->response) {
     if (connection->request->method == HTTP_METHOD_GET) connection->str = mime->response;
     connection->length = mime->response_size;
@@ -299,9 +329,17 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   (void)ssl;
 #endif /* USE_SSL */
 
-  if (connection->length > -1) {
+  if (connection->length > -1 && connection->response->status_code != 204) {
     snprintf(content_length, sizeof(content_length), "%lld", (long long)connection->length);
-    http_header_setvalue(connection->response, HEADER_CONTENT_LENGTH, content_length);
+    if (http_header_setvalue(connection->response, HEADER_CONTENT_LENGTH, content_length) < 0) {
+      connection->response->status_code = 500;
+      connection->length = 0;
+      connection->str = NULL;
+      if (connection->filefd >= 0) {
+        close(connection->filefd);
+        connection->filefd = -1;
+      }
+    }
   }
 
   flags = MSG_NOSIGNAL;

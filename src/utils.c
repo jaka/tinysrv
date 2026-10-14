@@ -9,7 +9,7 @@ char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters)
   const char *d;
 
   if (!str || !*str || !match_length) return NULL;
-  if (!strlen(delimiters)) return NULL;
+  if (!*delimiters) return NULL;
 
   start = *str;
   *match_length = 0;

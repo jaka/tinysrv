@@ -1,0 +1,28 @@
+[Unit]
+Description=tinysrv web server
+After=network.target
+
+[Service]
+# The binary daemonizes on its own, so Type=forking (do NOT pass -f in $ARGS).
+Type=forking
+
+# Working directory for the pidfile / writable runtime state, owned by User=.
+RuntimeDirectory=tinysrv
+RuntimeDirectoryMode=0770
+
+# Optional file that sets ARGS=..., e.g.:
+#   ARGS=-p 80 -S /var/www/ 0.0.0.0
+#   ARGS=-k 443 -C /etc/ssl/tinysrv.pem -p 80 -S /var/www/ 0.0.0.0
+EnvironmentFile=-/run/tinysrv/tinysrv.args
+ExecStart=/usr/local/bin/tinysrv $ARGS
+
+User=tinysrv
+Group=tinysrv
+
+# If binding a privileged port (<1024) with User= set, grant only this capability.
+# With these, do NOT also pass "-u tinysrv" in $ARGS (the process is already that user).
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

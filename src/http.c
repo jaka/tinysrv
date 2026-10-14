@@ -109,11 +109,29 @@ static char *http_header_find(char *header_start, const char *key, unsigned int 
   return NULL;
 }
 
+static void http_unfold(char *const buffer)
+{
+  char *src, *dst;
+
+  dst = src = buffer;
+  while (*src) {
+    if (src[0] == '\r' && src[1] == '\n' && (src[2] == ' ' || src[2] == '\t')) {
+      src += 2;
+      continue;
+    }
+    *dst++ = *src++;
+  }
+  *dst = 0;
+}
+
 int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error)
 {
   char *str;
   char *tok, *line = buffer;
   unsigned int tok_length, line_length;
+
+  /* Unfold obsolete line folding (RFC 7230), joining folded values onto one line. */
+  http_unfold(buffer);
 
   *error = 400;
 
@@ -125,11 +143,11 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   tok = tu_strtok(&str, &tok_length, " \t");
   DEBUG_PRINT("Got method: %.*s", tok_length, tok);
   if (!tok_length) return -1;
-  if (!strncasecmp(tok, "GET", tok_length))
+  if (tok_length == 3 && !strncasecmp(tok, "GET", 3))
     header->method = HTTP_METHOD_GET;
-  else if (!strncasecmp(tok, "HEAD", tok_length))
+  else if (tok_length == 4 && !strncasecmp(tok, "HEAD", 4))
     header->method = HTTP_METHOD_HEAD;
-  else if (!strncasecmp(tok, "POST", tok_length)) {
+  else if (tok_length == 4 && !strncasecmp(tok, "POST", 4)) {
     header->method = HTTP_METHOD_POST;
     *error = 501;
     return -1;

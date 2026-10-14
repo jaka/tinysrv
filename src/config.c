@@ -105,6 +105,11 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
           cur_socket->options &= ~DO_REDIRECT;
           continue;
 
+        case 'F':
+          /* Serve only files: 404 instead of an empty placeholder response. */
+          cur_socket->options |= DO_FILES;
+          continue;
+
           /* No default because we want to move on to the next section and process further. */
       }
 

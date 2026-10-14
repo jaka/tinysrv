@@ -7,7 +7,8 @@ enum ts_socket_option {
   DO_204 = 1,
   DO_CLOSE = 1 << 1,
   DO_REDIRECT = 1 << 2,
-  DO_SSL = 1 << 3
+  DO_SSL = 1 << 3,
+  DO_FILES = 1 << 4
 };
 
 struct ts_socket {
