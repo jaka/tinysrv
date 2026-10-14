@@ -65,58 +65,6 @@ char *tu_strbtok(char **str, unsigned int *match_length, const char *delimiter)
   return start_ptr;
 }
 
-unsigned int find_delimiter(const char *startptr, char **endptr, const char *delimiters)
-{
-  char *ptr;
-  unsigned int cur_delimiter, delimiters_length, match_length;
-
-  delimiters_length = strlen(delimiters);
-  if (!delimiters_length) return 0;
-
-  if (startptr) ptr = (char *)startptr;
-  else if (endptr) ptr = *endptr;
-  else return 0;
-
-  match_length = 0;
-  cur_delimiter = 0;
-  for (; *ptr; ptr++) {
-    match_length++;
-    if (*ptr == delimiters[cur_delimiter]) {
-      cur_delimiter++;
-      if (cur_delimiter == delimiters_length) {
-        match_length -= cur_delimiter;
-        break;
-      }
-    }
-    else {
-      if (*ptr == delimiters[0]) cur_delimiter = 1;
-      else cur_delimiter = 0;
-    }
-  }
-
-  if (endptr) *endptr = ptr + 1;
-
-  return match_length;
-}
-
-char *strnstr(const char *str, const char *needle, const unsigned int len)
-{
-  int i, last_i;
-  unsigned int needle_len;
-
-  needle_len = strlen(needle);
-  if (!needle_len) return (char *)str;
-  if (len < needle_len) return NULL;
-
-  last_i = len - needle_len;
-  for (i = 0; i <= last_i; i++) {
-    if (*str == *needle && !strncmp(str, needle, needle_len)) return (char *)str;
-    str++;
-  }
-
-  return NULL;
-}
-
 char *strstr_last(const char *const str1, const char *const str2)
 {
   /*
@@ -203,7 +151,6 @@ int ts_concatenate_path_filename(char *buf, const int buflen, const char *path, 
   p = buf;
   remaining = buflen;
 
-  if (!remaining) return -1;
   *p = 0;
 
   /* copy path if present */

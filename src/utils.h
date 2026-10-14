@@ -4,8 +4,6 @@
 char *tu_strtok(char **, unsigned int *, const char *);
 char *tu_strbtok(char **, unsigned int *, const char *);
 
-unsigned int find_delimiter(const char *startptr, char **endptr, const char *delimiters);
-char *strnstr(const char *str, const char *needle, const unsigned int len);
 char *strstr_last(const char *const str1, const char *const str2);
 void decode_url(char *to, const char *from);
 int change_dots_to_underscore(char *const);

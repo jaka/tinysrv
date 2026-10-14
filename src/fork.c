@@ -11,6 +11,10 @@
 
 #include "debug.h"
 
+#ifndef WAIT_ANY
+#define WAIT_ANY -1
+#endif
+
 struct fork_process_s *process_list;
 
 void subprocess_init(void)
@@ -97,9 +101,6 @@ void subprocess_run(void)
     }
 
     /* Wait for any subprocesses to exit. */
-#ifndef WAIT_ANY
-#define WAIT_ANY -1
-#endif
     pid = waitpid(WAIT_ANY, &status, 0);
 
     if (pid > 0) {

@@ -23,7 +23,6 @@ typedef enum {
 } http_field_key_index;
 
 struct http_field_key {
-  http_field_key_index key_index;
   const char *key;
   unsigned int key_length;
 };
@@ -31,14 +30,14 @@ struct http_field_key {
 typedef struct http_field_key http_field_key_t;
 
 static const http_field_key_t http_field_keys[] = {
-    {HEADER_HOSTNAME, HEADER_HOSTNAME_STR, sizeof(HEADER_HOSTNAME_STR) - 1},
-    {HEADER_ACCEPT, HEADER_ACCEPT_STR, sizeof(HEADER_ACCEPT_STR) - 1},
-    {HEADER_REFERER, HEADER_REFERER_STR, sizeof(HEADER_REFERER_STR) - 1},
-    {HEADER_CONTENT_TYPE, HEADER_CONTENT_TYPE_STR, sizeof(HEADER_CONTENT_TYPE_STR) - 1},
-    {HEADER_CONTENT_LENGTH, HEADER_CONTENT_LENGTH_STR, sizeof(HEADER_CONTENT_LENGTH_STR) - 1},
-    {HEADER_CONNECTION, HEADER_CONNECTION_STR, sizeof(HEADER_CONNECTION_STR) - 1},
-    {HEADER_LOCATION, HEADER_LOCATION_STR, sizeof(HEADER_LOCATION_STR) - 1},
-    {0, NULL, 0}};
+    {HEADER_HOSTNAME_STR, sizeof(HEADER_HOSTNAME_STR) - 1},
+    {HEADER_ACCEPT_STR, sizeof(HEADER_ACCEPT_STR) - 1},
+    {HEADER_REFERER_STR, sizeof(HEADER_REFERER_STR) - 1},
+    {HEADER_CONNECTION_STR, sizeof(HEADER_CONNECTION_STR) - 1},
+    {HEADER_CONTENT_TYPE_STR, sizeof(HEADER_CONTENT_TYPE_STR) - 1},
+    {HEADER_CONTENT_LENGTH_STR, sizeof(HEADER_CONTENT_LENGTH_STR) - 1},
+    {HEADER_LOCATION_STR, sizeof(HEADER_LOCATION_STR) - 1},
+    {NULL, 0}};
 
 #define HTTP_HEADER_FIELDS (sizeof(http_field_keys) / sizeof(http_field_key_t))
 

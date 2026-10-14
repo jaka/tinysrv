@@ -17,32 +17,23 @@
 
 static const mime_t *get_mime(char *ext)
 {
-  const mime_t *ar_mimes;
   unsigned int i;
 
-  if (!ext || *ext != '.')
-    /* Return no mime: SENT_NO_EXT. */
-    return &no_mime;
-
-  /* Skip the dot and compare only characters. */
+  if (!ext || *ext != '.') return &no_mime;
   ext++;
 
-  /* Load first mime from array. */
-  ar_mimes = &default_mimes[0];
+  for (i = 0; default_mimes[i].ext; i++)
+    if (!strncasecmp(ext, default_mimes[i].ext, default_mimes[i].ext_len) && !ext[default_mimes[i].ext_len])
+      return &default_mimes[i];
 
-  for (i = 0; ar_mimes[i].ext; i++) {
-    if (!strncasecmp(ext, ar_mimes[i].ext, ar_mimes[i].ext_len) && !ext[ar_mimes[i].ext_len]) return &ar_mimes[i];
-  }
-
-  /* Return last mime: SEND_UNK_EXT. */
-  return &ar_mimes[i];
+  return &default_mimes[i];
 }
 
 /* Open `rel` beneath `base`, refusing to follow symlinks in any component. */
 static int open_nofollow(const char *base, const char *rel, struct stat *st)
 {
   char *path, *p, *slash;
-  int dirfd, fd;
+  int dirfd, fd, next;
 
   dirfd = open(base, O_RDONLY | O_DIRECTORY);
   if (dirfd < 0) return -1;
@@ -56,21 +47,11 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
   fd = -1;
   p = path;
   while (*p) {
-
     while (*p == '/') p++;
     if (!*p) break;
 
     slash = strchr(p, '/');
-    if (slash) *slash = 0;
-
-    if (slash) {
-      int next = openat(dirfd, p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
-      close(dirfd);
-      dirfd = next;
-      if (dirfd < 0) break;
-      p = slash + 1;
-    }
-    else {
+    if (!slash) {
       fd = openat(dirfd, p, O_RDONLY | O_NOFOLLOW);
       if (fd >= 0 && (fstat(fd, st) < 0 || (st->st_mode & S_IFMT) != S_IFREG)) {
         close(fd);
@@ -78,6 +59,13 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
       }
       break;
     }
+
+    *slash = 0;
+    next = openat(dirfd, p, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    close(dirfd);
+    dirfd = next;
+    if (dirfd < 0) break;
+    p = slash + 1;
   }
 
   if (dirfd >= 0) close(dirfd);
@@ -88,8 +76,7 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
 static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const char *filename)
 {
   char file[MAX_PATH_LENGTH];
-  char *hostname, *rel;
-  unsigned int hostname_length, filename_length, length;
+  char *hostname, *rel, *port;
   int fd;
   struct stat st;
 
@@ -102,9 +89,8 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
     return -1;
   }
 
-  hostname_length = find_delimiter(hostname, NULL, ":");
-  if (hostname_length > 0) hostname[hostname_length] = 0;
-  else hostname_length = strlen(hostname);
+  port = strchr(hostname, ':');
+  if (port) *port = 0;
 
   if (change_dots_to_underscore(hostname) < 0) {
     free(hostname);
@@ -112,31 +98,15 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
     return -1;
   }
 
-  length = 1; /* NUL terminator */
-  length += hostname_length;
-
-  filename_length = strlen(filename);
-  length += filename_length;
-
-  if (sock->serve_path_length > 0) {
-    length += sock->serve_path_length;
-    if (*(sock->serve_path + sock->serve_path_length - 1) != '/')
-      length++;
+  if (sock->serve_path_length + strlen(hostname) + strlen(filename) + 1 > sizeof(file)) {
+    free(hostname);
+    return -1;
   }
 
-  if (length > sizeof(file)) return -1;
-  file[0] = 0;
-
-  /* Concatenate file. */
-  if (sock->serve_path_length > 0) {
-    strncpy(file, sock->serve_path, sock->serve_path_length);
-    *(file + sock->serve_path_length) = 0;
-    if (*(sock->serve_path + sock->serve_path_length - 1) != '/')
-      strcat(file, "/");
-  }
-  rel = file + strlen(file);
-  strcat(file, hostname);
-  strcat(file, filename);
+  rel = file + sock->serve_path_length;
+  if (sock->serve_path_length > 0) memcpy(file, sock->serve_path, sock->serve_path_length);
+  strcpy(rel, hostname);
+  strcat(rel, filename);
 
   free(hostname);
 
@@ -144,25 +114,26 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
 
   /* Open the file beneath the serve path, refusing to follow symlinks. */
   fd = open_nofollow(sock->serve_path, rel, &st);
-  if (fd >= 0) connection->length = st.st_size;
-
-  if (fd >= 0) {
-    connection->response->status_code = 200;
-    switch (connection->request->method) {
-      case HTTP_METHOD_GET:
-        connection->filefd = fd;
-        return 0;
-      case HTTP_METHOD_HEAD:
-        close(fd);
-        return 0;
-      default:
-        close(fd);
-    }
-    connection->response->status_code = 501;
+  if (fd < 0) {
+    connection->response->status_code = 403;
     return -1;
   }
-  else connection->response->status_code = 403;
 
+  connection->length = st.st_size;
+
+  if (connection->request->method == HTTP_METHOD_GET) {
+    connection->filefd = fd;
+    connection->response->status_code = 200;
+    return 0;
+  }
+  if (connection->request->method == HTTP_METHOD_HEAD) {
+    close(fd);
+    connection->response->status_code = 200;
+    return 0;
+  }
+
+  close(fd);
+  connection->response->status_code = 501;
   return -1;
 }
 
@@ -176,7 +147,7 @@ static int handle_redirect(ps_connection_t *connection)
 
   DEBUG_PRINT("Query: %s.", query);
 
-  if (!strcasestr(query, "=http") && !strcasestr(query, "\x3dhttp") && !strcasestr(query, "%5Cx3dhttp"))
+  if (!strcasestr(query, "=http") && !strcasestr(query, "\\x3dhttp") && !strcasestr(query, "%5Cx3dhttp"))
     return -1;
 
   /* Decoded string could be shorter, but +1 for termination. */
@@ -191,11 +162,11 @@ static int handle_redirect(ps_connection_t *connection)
   if (!url) url = strstr_last(decoded_query, "https://");
 
   /* Reject control characters (e.g. CR/LF) to prevent header/response splitting. */
-  if (url) {
-    for (p = url; *p; p++) {
-      if ((unsigned char)*p < 0x20 || (unsigned char)*p == 0x7f) break;
+  for (p = url; p && *p; p++) {
+    if ((unsigned char)*p < 0x20 || (unsigned char)*p == 0x7f) {
+      url = NULL;
+      break;
     }
-    if (*p) url = NULL;
   }
 
   if (url) {
@@ -218,29 +189,27 @@ static int handle_redirect(ps_connection_t *connection)
 
 static int handle_jsclose(ps_connection_t *connection, const mime_t *mime)
 {
-  int cont;
   char *accept;
+  int cont;
 
-  cont = 0;
-  /* We return JSCLOSE if file extension is htm or html. */
-  if (mime->ext && (!strcmp(mime->ext, "htm") || !strcmp(mime->ext, "html"))) cont = 1;
-  /* Or if Mimetype is unknown. */
+  if (mime->ext)
+    /* We return JSCLOSE if file extension is htm or html. */
+    cont = !strcmp(mime->ext, "htm") || !strcmp(mime->ext, "html");
   else if (!mime->ext_len) {
+    /* Or if Mimetype is unknown. */
     accept = http_header_getvalue(connection->request, HEADER_ACCEPT);
-    if (accept != NULL) {
-      if (strcmp(accept, "\x2A\x2F\x2A")) /*  * / *  */
-        cont = 1;
-      free(accept);
-    }
+    cont = accept && strcmp(accept, "\x2A\x2F\x2A"); /*  * / *  */
+    free(accept);
   }
+  else
+    cont = 0;
 
   if (!cont) return -1;
 
   http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, "text/html");
   connection->response->status_code = 200;
   connection->length = sizeof(content_jsclose) - 1;
-  if (connection->request->method == HTTP_METHOD_GET)
-    connection->str = content_jsclose;
+  if (connection->request->method == HTTP_METHOD_GET) connection->str = content_jsclose;
   return 0;
 }
 
@@ -265,34 +234,25 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
   DEBUG_PRINT("Serve ext: %s", ext);
   DEBUG_PRINT("Serve mime: %s", mime->typestr);
 
-  if (sock->options & DO_204) {
-    /* HTTP 204 No Content for Google generate_204 URLs. */
-    if (!strcasecmp(filename, "/generate_204") || !strcasecmp(filename, "/gen_204")) {
-      connection->response->status_code = 204;
-      connection->length = 0;
-      return 0;
-    }
+  /* HTTP 204 No Content for Google generate_204 URLs. */
+  if ((sock->options & DO_204) && (!strcasecmp(filename, "/generate_204") || !strcasecmp(filename, "/gen_204"))) {
+    connection->response->status_code = 204;
+    connection->length = 0;
+    return 0;
   }
 
   http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, mime->typestr);
 
-  if (sock->serve_path_length > 0 && is_safe_filename(filename)) {
-    if (!handle_file(connection, sock, filename)) return 0;
-  }
+  if (sock->serve_path_length > 0 && is_safe_filename(filename) && !handle_file(connection, sock, filename)) return 0;
 
-  if (sock->options & DO_REDIRECT) {
-    /* HTTP 307 Temporary Redirect for click counters. */
-    if (!handle_redirect(connection)) return 0;
-  }
+  /* HTTP 307 Temporary Redirect for click counters. */
+  if ((sock->options & DO_REDIRECT) && !handle_redirect(connection)) return 0;
 
-  if (sock->options & DO_CLOSE) {
-    if (!handle_jsclose(connection, mime)) return 0;
-  }
+  if ((sock->options & DO_CLOSE) && !handle_jsclose(connection, mime)) return 0;
 
   /* Dummy file. */
   if (mime->response) {
-    if (connection->request->method == HTTP_METHOD_GET)
-      connection->str = mime->response;
+    if (connection->request->method == HTTP_METHOD_GET) connection->str = mime->response;
     connection->length = mime->response_size;
   }
   else connection->length = 0;
@@ -301,25 +261,28 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
   return 0;
 }
 
-static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
+static int connection_recv(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
 {
 #ifdef USE_SSL
-  int rv;
-
-  if (sock->options & DO_SSL) {
-
-    ssl->cert_path = sock->cert_path;
-
-    rv = ts_ssl_session_init(ssl, fd);
-    if (rv > 0) return SSL_read(ssl->s, buf, buflen);
-    else return -1;
-  }
+  if (sock->options & DO_SSL) return SSL_read(ssl->s, buf, buflen);
 #else
   (void)sock;
   (void)ssl;
 #endif /* USE_SSL */
 
   return recv(fd, buf, buflen, 0);
+}
+
+static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
+{
+#ifdef USE_SSL
+  if (sock->options & DO_SSL) {
+    ssl->cert_path = sock->cert_path;
+    if (ts_ssl_session_init(ssl, fd) <= 0) return -1;
+  }
+#endif /* USE_SSL */
+
+  return connection_recv(sock, ssl, fd, buf, buflen);
 }
 
 static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_connection_t *connection)
@@ -393,6 +356,16 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   return size;
 }
 
+static void connection_drain(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
+{
+  time_t deadline = time(NULL) + POST_DRAIN_TIMEOUT;
+  int size;
+
+  do {
+    size = connection_recv(sock, ssl, fd, buf, buflen);
+  } while (size > 0 && time(NULL) < deadline);
+}
+
 int connection_new(ts_socket_t *sock, int fd)
 {
   int yes;
@@ -413,9 +386,11 @@ int connection_new(ts_socket_t *sock, int fd)
   timeout.tv_sec = 1;
   timeout.tv_usec = 0;
   if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
+    close(fd);
     return -1;
   }
   if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
+    close(fd);
     return -1;
   }
 
@@ -423,6 +398,8 @@ int connection_new(ts_socket_t *sock, int fd)
   setsockopt(fd, IPPROTO_TCP, TCP_CORK, (void *)&yes, sizeof(yes));
 
   /* Create new connection. */
+  memset(&request_header, 0, sizeof(request_header));
+  memset(&response_header, 0, sizeof(response_header));
   connection.str = NULL;
   connection.length = -1;
   connection.filefd = -1;
@@ -447,8 +424,6 @@ int connection_new(ts_socket_t *sock, int fd)
       request_buffer[request_buffer_size] = 0;
 
       http_error = 0;
-      request_header.method = HTTP_METHOD_UNKNOWN;
-      request_header.filename = NULL;
       http_header_parse(&request_header, request_buffer, &http_error);
 
       if (request_header.method == HTTP_METHOD_POST) {
@@ -457,19 +432,10 @@ int connection_new(ts_socket_t *sock, int fd)
         Bound the drain by wall-clock time so a client trickling bytes cannot hold the
         single worker indefinitely.
         */
-        time_t drain_deadline = time(NULL) + POST_DRAIN_TIMEOUT;
-        do {
-#ifdef USE_SSL
-          if (sock->options & DO_SSL)
-            request_buffer_size = SSL_read(ssl.s, request_buffer, sizeof(request_buffer) - 1);
-          else
-#endif /* USE_SSL */
-            request_buffer_size = recv(fd, request_buffer, sizeof(request_buffer) - 1, 0);
-        } while (request_buffer_size > 0 && time(NULL) < drain_deadline);
+        connection_drain(sock, &ssl, fd, request_buffer, sizeof(request_buffer) - 1);
       }
 
       response_header.version = HTTP_VERSION_10;
-      memset(&response_header.field, 0, sizeof(response_header.field));
       http_header_setvalue(&response_header, HEADER_CONNECTION, "close");
 
       if (!http_error) serve(&connection, sock, &http_error);

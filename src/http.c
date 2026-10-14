@@ -6,20 +6,6 @@
 #include <stdlib.h> /* free(), malloc() */
 #include <string.h> /* strcmp(), strncmp(), strndup(), strtok() */
 
-static const char *http_method_getstr(int method)
-{
-  switch (method) {
-    case HTTP_METHOD_GET:
-      return "GET";
-    case HTTP_METHOD_HEAD:
-      return "HEAD";
-    case HTTP_METHOD_POST:
-      return "POST";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 static const char *http_version_getstr(int version)
 {
   switch (version) {
@@ -40,22 +26,6 @@ static const ps_http_status_t *http_header_get_status(int status_code)
     if (http_statuses[i].status_code == status_code) return &http_statuses[i];
   }
   return &err_http_status;
-}
-
-static unsigned int http_header_field_getindex(unsigned int key_index)
-{
-  static unsigned int index_map[HTTP_HEADER_FIELDS];
-  static int prepared = 0;
-  unsigned int index;
-
-  if (!prepared) {
-    for (index = 0; http_field_keys[index].key; index++) {
-      index_map[http_field_keys[index].key_index] = index;
-    }
-    prepared = 1;
-  }
-
-  return index_map[key_index];
 }
 
 static unsigned int http_header_parse_connection(const char *str, const unsigned int len)
@@ -111,6 +81,34 @@ static unsigned int http_header_parse_connection(const char *str, const unsigned
   return connection;
 }
 
+static char *http_header_find(char *header_start, const char *key, unsigned int key_length, unsigned int *value_length)
+{
+  char *line, *str;
+  unsigned int line_length;
+
+  line = header_start;
+  for (str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n")) {
+
+    if (strncasecmp(str, key, key_length)) continue;
+    str += key_length;
+    line_length -= key_length;
+
+    if (*str != ':') continue;
+    str++;
+    line_length--;
+
+    while (*str == ' ' || *str == '\t') {
+      str++;
+      line_length--;
+    }
+
+    if (value_length) *value_length = line_length;
+    return str;
+  }
+
+  return NULL;
+}
+
 int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error)
 {
   char *str;
@@ -127,11 +125,11 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   tok = tu_strtok(&str, &tok_length, " \t");
   DEBUG_PRINT("Got method: %.*s", tok_length, tok);
   if (!tok_length) return -1;
-  if (!strncasecmp(tok, http_method_getstr(HTTP_METHOD_GET), tok_length))
+  if (!strncasecmp(tok, "GET", tok_length))
     header->method = HTTP_METHOD_GET;
-  else if (!strncasecmp(tok, http_method_getstr(HTTP_METHOD_HEAD), tok_length))
+  else if (!strncasecmp(tok, "HEAD", tok_length))
     header->method = HTTP_METHOD_HEAD;
-  else if (!strncasecmp(tok, http_method_getstr(HTTP_METHOD_POST), tok_length)) {
+  else if (!strncasecmp(tok, "POST", tok_length)) {
     header->method = HTTP_METHOD_POST;
     *error = 501;
     return -1;
@@ -148,6 +146,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   if (*str != '/') return -1;
   tok = tu_strtok(&str, &tok_length, " \t");
   header->filename = strndup(tok, tok_length);
+  if (!header->filename) return -1;
   header->query = header->filename + tok_length;
   DEBUG_PRINT("Got filename: %s", header->filename);
   DEBUG_PRINT("Got query: %s", header->query);
@@ -187,25 +186,8 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   }
 
   /* Parse connection field. */
-  for (str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n")) {
-
-    if (strncasecmp(str, "Connection", 10)) continue;
-    str += 10;
-    line_length -= 10;
-
-    if (*str != ':') continue;
-    str++;
-    line_length--;
-
-    while (*str == ' ' || *str == '\t') {
-      str++;
-      line_length--;
-    }
-
-    header->connection = http_header_parse_connection(str, line_length);
-
-    break;
-  }
+  str = http_header_find(line, "Connection", 10, &line_length);
+  if (str) header->connection = http_header_parse_connection(str, line_length);
 
   *error = 0;
   return 0;
@@ -213,48 +195,26 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
 char *http_header_getvalue(ps_http_request_header_t *header, const unsigned int key_index)
 {
-  unsigned int index, line_length;
-  char *line, *str;
+  unsigned int value_length;
+  char *value;
 
-  index = http_header_field_getindex(key_index);
+  value = http_header_find(header->header_start, http_field_keys[key_index].key, http_field_keys[key_index].key_length, &value_length);
+  if (!value) return NULL;
 
-  line = header->header_start;
-  for (str = tu_strbtok(&line, &line_length, "\r\n"); line_length; str = tu_strbtok(&line, &line_length, "\r\n")) {
-
-    if (strncasecmp(str, http_field_keys[index].key, http_field_keys[index].key_length))
-      continue;
-    str += http_field_keys[index].key_length;
-    line_length -= http_field_keys[index].key_length;
-
-    if (*str != ':') continue;
-    str++;
-    line_length--;
-
-    while (*str == ' ' || *str == '\t') {
-      str++;
-      line_length--;
-    }
-
-    return strndup(str, line_length);
-  }
-
-  return NULL;
+  return strndup(value, value_length);
 }
 
 int http_header_setvalue(ps_http_response_header_t *header, const unsigned int key_index, const char *value)
 {
-  int index;
-
   if (!value) return -1;
   /* Never allow CR/LF in a header value (header/response splitting). */
   if (strpbrk(value, "\r\n")) return -1;
 
-  index = http_header_field_getindex(key_index);
-  if (index >= (int)HTTP_HEADER_FIELDS) return -1;
+  if (key_index >= HTTP_HEADER_FIELDS) return -1;
 
-  if (header->field[index]) free(header->field[index]);
-  header->field[index] = strdup(value);
-  return header->field[index] ? 0 : -1;
+  free(header->field[key_index]);
+  header->field[key_index] = strdup(value);
+  return header->field[key_index] ? 0 : -1;
 }
 
 int http_header_fill(ps_http_response_header_t *header, char *buffer, int buflen)

@@ -13,7 +13,7 @@
 
 #include <arpa/inet.h> /* inet_ntop */
 #include <errno.h>
-#include <fcntl.h>       /* F_SETFL, F_GETFL, fcntl() */
+#include <fcntl.h>       /* open(), O_RDWR, F_TLOCK */
 #include <grp.h>         /* initgroups() */
 #include <netdb.h>       /* freeaddrinfo */
 #include <netinet/tcp.h> /* SOL_TCP, TCP_NODELAY */
@@ -32,7 +32,7 @@ static int ts_bind(ts_socket_t *sock)
   struct addrinfo hints, *servinfo, *servinfo_base;
   struct sockaddr_in *ipv4;
   ts_socket_t *cur_sock;
-  int flags, rv, sockfd, success, yes;
+  int rv, sockfd, success, yes;
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
@@ -64,7 +64,7 @@ static int ts_bind(ts_socket_t *sock)
         }
       }
 
-      sockfd = socket(servinfo->ai_family, servinfo->ai_socktype, servinfo->ai_protocol);
+      sockfd = socket(servinfo->ai_family, servinfo->ai_socktype | SOCK_NONBLOCK, servinfo->ai_protocol);
       if (sockfd < 0) {
         syslog(LOG_ERR, "socket: %m - %s:%s", cur_sock->ipaddr, cur_sock->port);
         continue;
@@ -79,17 +79,6 @@ static int ts_bind(ts_socket_t *sock)
           listen(sockfd, TS_BACKLOG)) {
         close(sockfd);
         syslog(LOG_ERR, "Abort: %m - %s:%s", cur_sock->ipaddr, cur_sock->port);
-        continue;
-      }
-
-      flags = fcntl(sockfd, F_GETFL, 0);
-      if (flags < 0) {
-        close(sockfd);
-        continue;
-      }
-
-      if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        close(sockfd);
         continue;
       }
 
@@ -111,10 +100,8 @@ static int ts_listen(ts_socket_t *sock)
   int nfds;
   int sockfd;
   int select_rv;
-  ts_socket_t *cur_sock;
+  ts_socket_t *cur_sock, *ready;
   fd_set readfds, selectfds;
-  struct sockaddr_storage their_addr;
-  socklen_t sin_size;
 
   nfds = 0;
   FD_ZERO(&readfds);
@@ -149,19 +136,19 @@ static int ts_listen(ts_socket_t *sock)
       }
     }
 
-    sockfd = 0;
+    ready = NULL;
     for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
       if (cur_sock->sockfd < 0) continue;
       if (FD_ISSET(cur_sock->sockfd, &selectfds)) {
-        sockfd = cur_sock->sockfd;
+        ready = cur_sock;
         select_rv--;
         FD_CLR(cur_sock->sockfd, &selectfds);
         break;
       }
     }
 
-    /* At this point select() should return socket handler, ie. cur_fd != 0. */
-    if (!sockfd) {
+    /* At this point select() should return socket handler, ie. ready != NULL. */
+    if (!ready) {
       /* This is bad case since select() will never be called again. */
       syslog(LOG_WARNING, "Child select() returned a value of %d, but no file descriptors of interest are ready for read.", select_rv);
       /* Set select_rv = 0 so that select() will be called on the next loop iteration. */
@@ -169,8 +156,7 @@ static int ts_listen(ts_socket_t *sock)
       continue;
     }
 
-    sin_size = sizeof(struct sockaddr_storage);
-    sockfd = accept(cur_sock->sockfd, (struct sockaddr *)&their_addr, &sin_size);
+    sockfd = accept(ready->sockfd, NULL, NULL);
     if (sockfd < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
         /* Client closed connection before we got a chance to accept it. */
@@ -181,7 +167,7 @@ static int ts_listen(ts_socket_t *sock)
     }
 
     DEBUG_PRINT("Starting handling socket %d", sockfd);
-    connection_new(cur_sock, sockfd);
+    connection_new(ready, sockfd);
   }
 
   return 0;
@@ -196,8 +182,8 @@ int ts_main_loop(void *arg)
     return 1;
   }
 
-  /* Change user. */
-  if (config->pw != NULL) {
+  /* Change user, but not when we are already running as it. */
+  if (config->pw != NULL && getuid() != config->pw->pw_uid) {
     if (initgroups(config->pw->pw_name, config->pw->pw_gid) < 0) {
       syslog(LOG_WARNING, "initgroups %s: %m", config->pw->pw_name);
       return 1;
@@ -210,6 +196,12 @@ int ts_main_loop(void *arg)
       syslog(LOG_WARNING, "setuid %d: %m", config->pw->pw_uid);
       return 1;
     }
+  }
+
+  /* A user was requested, so refuse to run as anything else. */
+  if (config->pw != NULL && getuid() != config->pw->pw_uid) {
+    syslog(LOG_ERR, "Not running as user %s, exiting.", config->pw->pw_name);
+    return 1;
   }
 
 #ifdef USE_SSL

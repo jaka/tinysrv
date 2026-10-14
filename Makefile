@@ -23,8 +23,8 @@ all: $(OBJECTS) $(TARGETS)
 %.o: %.c
 	$(CC) $(CFLAGS) $(OPTS) -c -o $@ $<
 
-$(TARGETS): $(OBJECTS)
-	$(CC) $(CFLAGS) $(OPTS) -o $@ $@.c $^ $(LDFLAGS)
+$(TARGETS): $(OBJECTS) $(TARGETS:%=%.c)
+	$(CC) $(CFLAGS) $(OPTS) -o $@ $^ $(LDFLAGS)
 	$(STRIP) $(SFLAGS) $@
 
 clean:

@@ -22,18 +22,29 @@ static int ts_ssl_loadcert(SSL *s, struct ts_ssl *ssl, const char *file)
   return SSL_TLSEXT_ERR_OK;
 }
 
+static int ts_ssl_trycert(SSL *s, struct ts_ssl *ssl, char *file, int buflen, const char *name, int *found)
+{
+  struct stat st;
+
+  *found = 0;
+  if (ts_concatenate_path_filename(file, buflen, ssl->cert_path, name) < 0) return SSL_TLSEXT_ERR_ALERT_FATAL;
+
+  DEBUG_PRINT("Certificate file: %s", file);
+  if (stat(file, &st) || (st.st_mode & S_IFMT) != S_IFREG) return SSL_TLSEXT_ERR_OK;
+
+  *found = 1;
+  return ts_ssl_loadcert(s, ssl, file);
+}
+
 static int ts_ssl_servername_cb(SSL *s, int *ad, void *arg)
 {
   struct ts_ssl *ssl;
   char file[MAX_PATH_LENGTH];
-  int dot_count;
+  int dot_count, found, rv;
   char *filename;
   char *pem_filename;
-  struct stat st;
-  int rv;
 
   (void)ad;
-  rv = SSL_TLSEXT_ERR_OK;
   ssl = (struct ts_ssl *)arg;
 
   /* Get servername from SSL request and save it. */
@@ -46,30 +57,22 @@ static int ts_ssl_servername_cb(SSL *s, int *ad, void *arg)
   filename = strdup(ssl->servername);
   dot_count = change_dots_to_underscore(filename);
   if (dot_count < 0) {
-    rv = SSL_TLSEXT_ERR_ALERT_FATAL;
-    goto free_all;
+    free(filename);
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
   }
 
   pem_filename = filename;
 
   /* Check certificate. */
-  ts_concatenate_path_filename(file, sizeof(file) - 1, ssl->cert_path, pem_filename);
-  DEBUG_PRINT("Certificate file: %s", file);
-  if (!stat(file, &st) && (st.st_mode & S_IFMT) == S_IFREG) {
-    rv = ts_ssl_loadcert(s, ssl, file);
-    goto free_all;
-  }
+  rv = ts_ssl_trycert(s, ssl, file, sizeof(file) - 1, pem_filename, &found);
+  if (found || rv != SSL_TLSEXT_ERR_OK) goto free_all;
 
   /* Check wildcard certificate. */
   if (dot_count > 1 && *pem_filename != '_') {
     pem_filename++;
     while (*pem_filename && *pem_filename != '_') pem_filename++;
     *(--pem_filename) = '+';
-    ts_concatenate_path_filename(file, sizeof(file) - 1, ssl->cert_path, pem_filename);
-    DEBUG_PRINT("Certificate file: %s", file);
-    if (!stat(file, &st) && (st.st_mode & S_IFMT) == S_IFREG) {
-      rv = ts_ssl_loadcert(s, ssl, file);
-    }
+    rv = ts_ssl_trycert(s, ssl, file, sizeof(file) - 1, pem_filename, &found);
   }
 
 free_all:

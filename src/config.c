@@ -26,6 +26,15 @@ static ts_socket_t *ts_socket_new(void)
   return sock;
 }
 
+static int set_string(char **dst, const char *src)
+{
+  char *copy = strdup(src);
+  if (!copy) return -1;
+  if (*dst) free(*dst);
+  *dst = copy;
+  return 0;
+}
+
 static int ts_socket_free(ts_socket_t *sock)
 {
   if (!sock) return -1;
@@ -106,30 +115,24 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
 
           case 'k':
             cur_socket->options |= DO_SSL;
-            if (cur_socket->port) free(cur_socket->port);
-            cur_socket->port = strdup(argv[i]);
+            if (set_string(&cur_socket->port, argv[i]) < 0) error = 1;
             continue;
 
           case 'p':
             cur_socket->options &= ~DO_SSL;
-            if (cur_socket->port) free(cur_socket->port);
-            cur_socket->port = strdup(argv[i]);
+            if (set_string(&cur_socket->port, argv[i]) < 0) error = 1;
             continue;
 
           case 'P':
-            if (config->pidfile) free(config->pidfile);
-            config->pidfile = strdup(argv[i]);
+            if (set_string(&config->pidfile, argv[i]) < 0) error = 1;
             continue;
 
           case 'u':
-            if (config->user) free(config->user);
-            config->user = strdup(argv[i]);
+            if (set_string(&config->user, argv[i]) < 0) error = 1;
             continue;
 
           case 'S':
-            if (cur_socket->serve_path) free(cur_socket->serve_path);
-            cur_socket->serve_path = strdup(argv[i]);
-            if (!cur_socket->serve_path) {
+            if (set_string(&cur_socket->serve_path, argv[i]) < 0) {
               error = 1;
               continue;
             }
@@ -144,8 +147,7 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
             continue;
 
           case 'C':
-            if (cur_socket->cert_path) free(cur_socket->cert_path);
-            cur_socket->cert_path = strdup(argv[i]);
+            if (set_string(&cur_socket->cert_path, argv[i]) < 0) error = 1;
             continue;
 
           default:
@@ -157,8 +159,7 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
     }
     else {
       /* Store IP to config_node. */
-      if (cur_socket->ipaddr) free(cur_socket->ipaddr);
-      cur_socket->ipaddr = strdup(argv[i]);
+      if (set_string(&cur_socket->ipaddr, argv[i]) < 0) error = 1;
 
       if (!cur_socket->port) {
         error = 1;
