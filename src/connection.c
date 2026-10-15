@@ -77,7 +77,7 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
 static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const char *filename)
 {
   char file[MAX_PATH_LENGTH];
-  char *hostname, *rel, *port, *strp;
+  char *hostname, *rel, *colon, *strp;
   int fd;
   struct stat st;
 
@@ -90,8 +90,8 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
     return -1;
   }
 
-  port = strchr(hostname, ':');
-  if (port) *port = 0;
+  colon = strchr(hostname, ':');
+  if (colon) *colon = 0;
 
   if (!*hostname) {
     free(hostname);
@@ -148,8 +148,7 @@ static int handle_file(ps_connection_t *connection, ts_socket_t *sock, const cha
 
 static int handle_redirect(ps_connection_t *connection)
 {
-  char *query, *referer, *url, *p;
-  char *decoded_query;
+  char *query, *referer, *url, *p, *decoded_query;
 
   query = connection->request->query;
   if (!*query) return -1;
@@ -318,11 +317,9 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
 static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_connection_t *connection)
 {
   char response_buffer[CHAR_BUF_SIZE];
-  int response_buffer_size;
-  int size;
+  int response_buffer_size, size, flags;
   char content_length[21];
   off_t offset;
-  int flags;
 
 #ifndef USE_SSL
   (void)sock;
@@ -369,12 +366,18 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
 
 #ifdef USE_SSL
     if (sock->options & DO_SSL) {
-      ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
+      int sent = ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
+      if (sent < 0) {
+        close(connection->filefd);
+        connection->filefd = -1;
+        return -1;
+      }
+      size += sent;
     }
     else
 #endif /* USE_SSL */
     {
-      /* Output file hander content. */
+      /* Output file handle content. */
       offset = 0;
       size += sendfile(fd, connection->filefd, &offset, (size_t)connection->length);
     }
@@ -406,14 +409,12 @@ static void connection_drain(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char
 
 int connection_new(ts_socket_t *sock, int fd)
 {
-  int yes;
-  int http_error;
+  int yes, http_error, request_buffer_size;
   unsigned int index;
   struct timeval timeout;
   ps_http_request_header_t request_header;
   ps_http_response_header_t response_header;
   char request_buffer[CHAR_BUF_SIZE];
-  int request_buffer_size;
   struct ts_ssl ssl = {0};
   ps_connection_t connection;
 

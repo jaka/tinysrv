@@ -126,8 +126,7 @@ static void http_unfold(char *const buffer)
 
 int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error)
 {
-  char *str;
-  char *tok, *line = buffer;
+  char *str, *tok, *line = buffer;
   unsigned int tok_length, line_length;
 
   /* Unfold obsolete line folding (RFC 7230), joining folded values onto one line. */
@@ -176,8 +175,8 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   DEBUG_PRINT("Got HTTP version: %.*s", tok_length, tok);
   if (tok_length != 8) return -1;
 
-  if (*(tok + 5) != '1')
-    /* HTTP/2.0 is not yet supported. */
+  if (strncmp(tok, "HTTP/", 5) || *(tok + 5) != '1')
+    /* Only HTTP/1.x is supported. */
     return -1;
 
   switch (*(tok + 7)) {

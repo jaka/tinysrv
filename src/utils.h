@@ -4,7 +4,7 @@
 char *tu_strtok(char **, unsigned int *, const char *);
 char *tu_strbtok(char **, unsigned int *, const char *);
 
-char *strstr_last(const char *const str1, const char *const str2);
+char *strstr_last(const char *const hay, const char *const needle);
 void decode_url(char *to, const char *from);
 int change_dots_to_underscore(char *const);
 int is_safe_filename(const char *const str);

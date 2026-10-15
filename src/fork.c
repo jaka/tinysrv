@@ -85,8 +85,7 @@ static struct fork_process_s *subprocess_find(pid_t pid)
 void subprocess_run(void)
 {
   struct fork_process_s *cur_process;
-  int status;
-  int death_pipe[2];
+  int status, death_pipe[2];
   pid_t new_pid, pid;
 
   if (pipe(death_pipe) < 0) {

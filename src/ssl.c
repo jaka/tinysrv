@@ -3,6 +3,7 @@
 #include "ssl.h"
 #include "utils.h"
 
+#include <ctype.h> /* tolower() */
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h> /* struct stat */
@@ -41,8 +42,7 @@ static int ts_ssl_servername_cb(SSL *s, int *ad, void *arg)
   struct ts_ssl *ssl;
   char file[MAX_PATH_LENGTH];
   int dot_count, found, rv;
-  char *filename;
-  char *pem_filename;
+  char *filename, *pem_filename, *p;
 
   (void)ad;
   ssl = (struct ts_ssl *)arg;
@@ -55,6 +55,11 @@ static int ts_ssl_servername_cb(SSL *s, int *ad, void *arg)
 
   /* Allocate memory for servername and transform it. */
   filename = strdup(ssl->servername);
+  if (!filename) return SSL_TLSEXT_ERR_ALERT_FATAL;
+
+  /* SNI host names are case-insensitive, so match lower-case certificate files. */
+  for (p = filename; *p; p++) *p = tolower((unsigned char)*p);
+
   dot_count = change_dots_to_underscore(filename);
   if (dot_count < 0) {
     free(filename);
@@ -82,33 +87,29 @@ free_all:
 
 int ts_ssl_sendfile(SSL *s, int filefd, off_t filesize)
 {
-  unsigned char *p, *buf;
-  off_t remaining_size;
+  unsigned char *buf;
+  off_t written, remaining_size;
   int len, rv;
 
   if (filesize <= 0) return 0;
 
   buf = mmap(0, (size_t)filesize, PROT_READ, MAP_PRIVATE, filefd, 0);
+  if (buf == MAP_FAILED) return -1;
 
-  if (buf != (unsigned char *)-1) {
+  written = 0;
+  for (remaining_size = filesize; remaining_size > 0;) {
+    len = remaining_size > MAX_SEND_BUFFER_SIZE ? MAX_SEND_BUFFER_SIZE : (int)remaining_size;
 
-    p = buf;
-    for (remaining_size = filesize; remaining_size > 0; remaining_size -= rv) {
+    rv = SSL_write(s, buf + written, len);
+    if (rv <= 0) break;
 
-      if (remaining_size > MAX_SEND_BUFFER_SIZE)
-        len = MAX_SEND_BUFFER_SIZE;
-      else
-        len = (int)remaining_size;
-
-      rv = SSL_write(s, p, len);
-      if (rv != len) break;
-
-      p += rv;
-    }
-    munmap(buf, (size_t)filesize);
+    written += rv;
+    remaining_size -= rv;
   }
 
-  return 0;
+  munmap(buf, (size_t)filesize);
+
+  return remaining_size > 0 ? -1 : (int)written;
 }
 
 int ts_ssl_session_init(struct ts_ssl *ssl, int fd)

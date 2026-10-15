@@ -62,21 +62,23 @@ static int ts_bind(ts_socket_t *sock)
   struct sockaddr_in *ipv4;
   ts_socket_t *cur_sock;
   char optbuf[64];
-  int rv, sockfd, success, yes;
+  const char *port;
+  int rv, sockfd, bound, one;
 
   memset(&hints, 0, sizeof(hints));
   hints.ai_family = AF_INET;
   hints.ai_socktype = SOCK_STREAM;
 
   /* Create sockets. */
-  success = 0;
-  yes = 1;
+  bound = 0;
+  one = 1;
   for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
 
     hints.ai_flags = !cur_sock->ipaddr ? AI_PASSIVE : 0;
+    port = cur_sock->port ? cur_sock->port : DEFAULT_PORT;
 
     servinfo_base = NULL;
-    rv = getaddrinfo(cur_sock->ipaddr, cur_sock->port, &hints, &servinfo_base);
+    rv = getaddrinfo(cur_sock->ipaddr, port, &hints, &servinfo_base);
     if (rv) {
       syslog(LOG_ERR, "getaddrinfo: %s.", gai_strerror(rv));
       continue;
@@ -96,40 +98,38 @@ static int ts_bind(ts_socket_t *sock)
 
       sockfd = socket(servinfo->ai_family, servinfo->ai_socktype | SOCK_NONBLOCK, servinfo->ai_protocol);
       if (sockfd < 0) {
-        syslog(LOG_ERR, "socket: %m - %s:%s", cur_sock->ipaddr, cur_sock->port);
+        syslog(LOG_ERR, "socket: %m - %s:%s", cur_sock->ipaddr, port);
         continue;
       }
 
-      if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) ||
+      if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(int)) ||
 #ifdef SO_REUSEPORT
-          setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) ||
+          setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(int)) ||
 #endif
-          setsockopt(sockfd, SOL_TCP, TCP_NODELAY, &yes, sizeof(int)) ||
+          setsockopt(sockfd, SOL_TCP, TCP_NODELAY, &one, sizeof(int)) ||
           bind(sockfd, servinfo->ai_addr, servinfo->ai_addrlen) ||
           listen(sockfd, TS_BACKLOG)) {
         close(sockfd);
-        syslog(LOG_ERR, "Abort: %m - %s:%s", cur_sock->ipaddr, cur_sock->port);
+        syslog(LOG_ERR, "Abort: %m - %s:%s", cur_sock->ipaddr, port);
         continue;
       }
 
       cur_sock->sockfd = sockfd;
-      success++;
-      syslog(LOG_INFO, "Listening on address %s and port %s with options: %s.", cur_sock->ipaddr, cur_sock->port, ts_options_str(cur_sock->options, optbuf, sizeof(optbuf)));
+      bound++;
+      syslog(LOG_INFO, "Listening on address %s and port %s with options: %s.", cur_sock->ipaddr, port, ts_options_str(cur_sock->options, optbuf, sizeof(optbuf)));
       break;
     }
 
     freeaddrinfo(servinfo_base);
   }
 
-  DEBUG_PRINT("Listening on %d sockets.", success);
-  return success ? 0 : -1;
+  DEBUG_PRINT("Listening on %d sockets.", bound);
+  return bound ? 0 : -1;
 }
 
 static int ts_listen(ts_socket_t *sock)
 {
-  int nfds;
-  int sockfd;
-  int select_rv;
+  int nfds, sockfd, select_rv;
   ts_socket_t *cur_sock, *ready;
   fd_set readfds, selectfds;
 
@@ -268,9 +268,7 @@ static void signal_handler(int signum)
 
 int main(int argc, char **argv)
 {
-  int pidfd = -1;
-  int pid_locked = 0;
-  int ret = EXIT_FAILURE;
+  int pidfd = -1, pid_locked = 0, ret = EXIT_FAILURE;
   char pid[16];
   uid_t uid;
   struct sigaction sa;

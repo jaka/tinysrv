@@ -191,7 +191,6 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
   }
 
   if (!config->sock) {
-    if (!cur_socket->port) cur_socket->port = strdup(DEFAULT_PORT);
     cur_socket->next = NULL;
     config->sock = cur_socket;
   }

@@ -5,8 +5,8 @@
 
 char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters)
 {
-  char *s, *start;
-  const char *d;
+  char *scan, *start;
+  const char *delim;
 
   if (!str || !*str || !match_length) return NULL;
   if (!*delimiters) return NULL;
@@ -14,10 +14,10 @@ char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters)
   start = *str;
   *match_length = 0;
 
-  for (s = *str; *s; s++) {
-    for (d = delimiters; *d; d++) {
-      if (*s == *d) {
-        *str = s + 1;
+  for (scan = *str; *scan; scan++) {
+    for (delim = delimiters; *delim; delim++) {
+      if (*scan == *delim) {
+        *str = scan + 1;
         return start;
       }
     }
@@ -65,24 +65,24 @@ char *tu_strbtok(char **str, unsigned int *match_length, const char *delimiter)
   return start_ptr;
 }
 
-char *strstr_last(const char *const str1, const char *const str2)
+char *strstr_last(const char *const hay, const char *const needle)
 {
   /*
-  Search string [str2] from right to left in string [str1].
+  Search string [needle] from right to left in string [hay].
   */
   char *strp;
-  int len1, len2;
+  int hay_len, needle_len;
 
-  len2 = strlen(str2);
-  if (!len2) return (char *)str1;
+  needle_len = strlen(needle);
+  if (!needle_len) return (char *)hay;
 
-  len1 = strlen(str1);
-  if (len1 < len2) return NULL;
+  hay_len = strlen(hay);
+  if (hay_len < needle_len) return NULL;
 
-  for (strp = (char *)(str1 + len1 - len2); strp != str1; strp--) {
-    if (*strp == *str2 && !strncmp(strp, str2, len2)) return strp;
+  for (strp = (char *)(hay + hay_len - needle_len); strp != hay; strp--) {
+    if (*strp == *needle && !strncmp(strp, needle, needle_len)) return strp;
   }
-  if (!strncmp(str1, str2, len2)) return (char *)str1;
+  if (!strncmp(hay, needle, needle_len)) return (char *)hay;
 
   return NULL;
 }
