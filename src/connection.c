@@ -314,17 +314,24 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
   return connection_recv(sock, ssl, fd, buf, buflen);
 }
 
+static ssize_t connection_send(ts_socket_t *sock, struct ts_ssl *ssl, int fd, const char *buf, int buflen, int flags)
+{
+#ifdef USE_SSL
+  if (sock->options & DO_SSL) return SSL_write(ssl->s, buf, buflen);
+#else
+  (void)sock;
+  (void)ssl;
+#endif /* USE_SSL */
+  return send(fd, buf, buflen, flags);
+}
+
 static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_connection_t *connection)
 {
   char response_buffer[CHAR_BUF_SIZE];
   int response_buffer_size, size, flags;
   char content_length[21];
   off_t offset;
-
-#ifndef USE_SSL
-  (void)sock;
-  (void)ssl;
-#endif /* USE_SSL */
+  ssize_t sent;
 
   if (connection->length > -1 && connection->response->status_code != 204) {
     snprintf(content_length, sizeof(content_length), "%lld", (long long)connection->length);
@@ -350,12 +357,7 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
     return -1;
   }
 
-#ifdef USE_SSL
-  if (sock->options & DO_SSL)
-    size = SSL_write(ssl->s, response_buffer, response_buffer_size);
-  else
-#endif /* USE_SSL */
-    size = send(fd, response_buffer, response_buffer_size, flags);
+  size = (int)connection_send(sock, ssl, fd, response_buffer, response_buffer_size, flags);
 
   if (size < 0) {
     if (connection->filefd >= 0) close(connection->filefd);
@@ -365,36 +367,27 @@ static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_co
   if (connection->filefd >= 0) {
 
 #ifdef USE_SSL
-    if (sock->options & DO_SSL) {
-      int sent = ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
-      if (sent < 0) {
-        close(connection->filefd);
-        connection->filefd = -1;
-        return -1;
-      }
-      size += sent;
-    }
+    if (sock->options & DO_SSL)
+      sent = ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
     else
 #endif /* USE_SSL */
     {
       /* Output file handle content. */
       offset = 0;
-      size += sendfile(fd, connection->filefd, &offset, (size_t)connection->length);
+      sent = sendfile(fd, connection->filefd, &offset, (size_t)connection->length);
     }
 
     close(connection->filefd);
+    connection->filefd = -1;
   }
   else if (connection->str) {
-#ifdef USE_SSL
     /* Output constant buffer. */
-    if (sock->options & DO_SSL)
-      size += SSL_write(ssl->s, connection->str, (int)connection->length);
-    else
-#endif /* USE_SSL */
-      size += send(fd, connection->str, (size_t)connection->length, MSG_NOSIGNAL);
+    sent = connection_send(sock, ssl, fd, connection->str, (int)connection->length, MSG_NOSIGNAL);
   }
+  else return size;
 
-  return size;
+  if (sent < 0) return -1;
+  return size + (int)sent;
 }
 
 static void connection_drain(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)

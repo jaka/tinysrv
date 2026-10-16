@@ -108,7 +108,7 @@ static const ps_http_status_t http_statuses[] = {
 int http_header_parse(ps_http_request_header_t *, char *, int *);
 char *http_header_getvalue(ps_http_request_header_t *, const unsigned int);
 
-int http_header_setvalue(ps_http_response_header_t *header, const unsigned int key_index, const char *value);
-int http_header_fill(ps_http_response_header_t *header, char *buffer, int buflen);
+int http_header_setvalue(ps_http_response_header_t *, const unsigned int, const char *);
+int http_header_fill(ps_http_response_header_t *, char *, int);
 
 #endif

@@ -38,15 +38,13 @@ static int set_string(char **dst, const char *src)
 static int ts_socket_free(ts_socket_t *sock)
 {
   if (!sock) return -1;
-  if (sock->ipaddr) free(sock->ipaddr);
-  if (sock->port) free(sock->port);
-  if (sock->serve_path) {
-    sock->serve_path_length = 0;
-    free(sock->serve_path);
-  }
-  if (sock->cert_path) free(sock->cert_path);
+  free(sock->ipaddr);
+  free(sock->port);
+  sock->serve_path_length = 0;
+  free(sock->serve_path);
+  free(sock->cert_path);
   free(sock);
-  sock = 0;
+
   return 0;
 }
 
@@ -211,7 +209,7 @@ void ts_configuration_free(ts_configuration_t *config)
     ts_socket_free(cur_socket);
     cur_socket = next_socket;
   }
-  if (config->user != NULL) free(config->user);
-  if (config->pidfile != NULL) free(config->pidfile);
+  free(config->user);
+  free(config->pidfile);
   free(config);
 }
