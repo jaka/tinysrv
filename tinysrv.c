@@ -230,15 +230,15 @@ int ts_main_loop(void *arg)
   /* Change user, but not when we are already running as it. */
   if (config->pw != NULL && getuid() != config->pw->pw_uid) {
     if (initgroups(config->pw->pw_name, config->pw->pw_gid) < 0) {
-      syslog(LOG_WARNING, "initgroups %s: %m", config->pw->pw_name);
+      syslog(LOG_ERR, "initgroups %s: %m", config->pw->pw_name);
       return 1;
     }
     if (setgid(config->pw->pw_gid) < 0) {
-      syslog(LOG_WARNING, "setgid %d: %m", config->pw->pw_gid);
+      syslog(LOG_ERR, "setgid %d: %m", config->pw->pw_gid);
       return 1;
     }
     if (setuid(config->pw->pw_uid) < 0) {
-      syslog(LOG_WARNING, "setuid %d: %m", config->pw->pw_uid);
+      syslog(LOG_ERR, "setuid %d: %m", config->pw->pw_uid);
       return 1;
     }
   }
@@ -319,12 +319,12 @@ int main(int argc, char **argv)
   if (config->pidfile != NULL) {
     pidfd = open(config->pidfile, O_RDWR | O_CREAT, 0644);
     if (pidfd < 0) {
-      syslog(LOG_ERR, "ERROR: Could not open PID file %s, exiting.", config->pidfile);
+      syslog(LOG_ERR, "Could not open PID file %s, exiting.", config->pidfile);
       goto cleanup;
     }
     /* Try to lock file. */
     if (lockf(pidfd, F_TLOCK, 0) < 0) {
-      syslog(LOG_ERR, "ERROR: Could not lock PID file %s, exiting.", config->pidfile);
+      syslog(LOG_ERR, "Could not lock PID file %s, exiting.", config->pidfile);
       goto cleanup;
     }
     pid_locked = 1;
@@ -346,7 +346,7 @@ int main(int argc, char **argv)
       goto cleanup;
     }
     else if (uid != config->pw->pw_uid && uid) {
-      syslog(LOG_WARNING, "Root access is required to change user!");
+      syslog(LOG_ERR, "Root access is required to change user!");
       goto cleanup;
     }
   }

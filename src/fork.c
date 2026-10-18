@@ -64,7 +64,7 @@ static int subprocess_setup_signal_handler(void)
 
   sa.sa_flags = SA_RESTART;
   if (sigaction(SIGTERM, &sa, NULL) < 0) {
-    syslog(LOG_WARNING, "Signal handler could not be set: %m.");
+    syslog(LOG_ERR, "Signal handler could not be set: %m.");
     return -1;
   }
 
@@ -111,10 +111,10 @@ void subprocess_run(void)
       }
       else if (new_pid > 0) {
         cur_process->pid = new_pid;
-        syslog(LOG_ERR, "Created new subprocess with PID %ld.", (long)new_pid);
+        syslog(LOG_INFO, "Created new subprocess with PID %ld.", (long)new_pid);
       }
       else {
-        syslog(LOG_INFO, "Could not create a subprocess.");
+        syslog(LOG_ERR, "Could not create a subprocess.");
         terminated = 1;
       }
     }
