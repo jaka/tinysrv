@@ -8,6 +8,7 @@
 #include <errno.h>       /* errno */
 #include <fcntl.h>       /* O_RDONLY */
 #include <netinet/tcp.h> /* TCP_CORK */
+#include <poll.h>        /* poll() */
 #include <stdio.h>
 #include <stdlib.h>       /* free(), malloc() */
 #include <string.h>       /* strcasestr() */
@@ -53,7 +54,8 @@ static int open_nofollow(const char *base, const char *rel, struct stat *st)
 
     slash = strchr(p, '/');
     if (!slash) {
-      fd = openat(dirfd, p, O_RDONLY | O_NOFOLLOW);
+      /* O_NONBLOCK so a FIFO cannot block the worker before the regular-file check. */
+      fd = openat(dirfd, p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
       if (fd >= 0 && (fstat(fd, st) < 0 || (st->st_mode & S_IFMT) != S_IFREG)) {
         close(fd);
         fd = -1;
@@ -302,8 +304,24 @@ static int connection_recv(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
   return recv(fd, buf, buflen, 0);
 }
 
+static long monotonic_ms(void)
+{
+  struct timespec ts;
+
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+/*
+Read until the end of the request header (empty line), the buffer is full, the peer stops
+sending or the overall deadline passes. A request may arrive in several TCP segments or TLS
+records. buf must have room for buflen + 1 bytes; the result is NUL terminated.
+*/
 static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
 {
+  long deadline;
+  int size, total, scan;
+
 #ifdef USE_SSL
   if (sock->options & DO_SSL) {
     ssl->cert_path = sock->cert_path;
@@ -311,7 +329,23 @@ static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *
   }
 #endif /* USE_SSL */
 
-  return connection_recv(sock, ssl, fd, buf, buflen);
+  deadline = monotonic_ms() + REQUEST_READ_TIMEOUT_MS;
+  total = 0;
+  do {
+    size = connection_recv(sock, ssl, fd, buf + total, buflen - total);
+    if (size <= 0) break;
+
+    /* Search only the new data, plus the tail of a terminator split across reads. */
+    scan = total > 3 ? total - 3 : 0;
+    total += size;
+    buf[total] = 0;
+
+    /* TLS handshake on a plain socket, answered by the caller. */
+    if (buf[0] == 0x16) break;
+    if (strstr(buf + scan, "\r\n\r\n")) break;
+  } while (total < buflen && monotonic_ms() < deadline);
+
+  return total ? total : size;
 }
 
 static ssize_t connection_send(ts_socket_t *sock, struct ts_ssl *ssl, int fd, const char *buf, int buflen, int flags)
@@ -400,6 +434,30 @@ static void connection_drain(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char
   } while (size > 0 && time(NULL) < deadline);
 }
 
+/*
+Lingering close: closing a socket with unread data makes the kernel send RST, which can
+destroy the response before the client has read it. Send FIN first, then discard whatever
+the client still sends until it closes or the deadline passes.
+*/
+static void connection_close(int fd)
+{
+  char buf[CHAR_BUF_SIZE];
+  struct pollfd pfd;
+  long deadline, remaining;
+
+  if (!shutdown(fd, SHUT_WR)) {
+    deadline = monotonic_ms() + LINGER_TIMEOUT_MS;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    while ((remaining = deadline - monotonic_ms()) > 0) {
+      if (poll(&pfd, 1, (int)remaining) <= 0) break;
+      if (recv(fd, buf, sizeof(buf), MSG_DONTWAIT) <= 0) break;
+    }
+  }
+
+  close(fd);
+}
+
 int connection_new(ts_socket_t *sock, int fd)
 {
   int yes, http_error, request_buffer_size;
@@ -453,10 +511,14 @@ int connection_new(ts_socket_t *sock, int fd)
       send(fd, content_noSSL, sizeof(content_noSSL) - 1, MSG_NOSIGNAL);
     }
     else {
-      request_buffer[request_buffer_size] = 0;
-
       http_error = 0;
-      http_header_parse(&request_header, request_buffer, &http_error);
+      /* Header fills the whole buffer without ending: too large to handle. */
+      if (request_buffer_size == sizeof(request_buffer) - 1 && !strstr(request_buffer, "\r\n\r\n")) {
+        http_error = 400;
+      }
+      else {
+        http_header_parse(&request_header, request_buffer, &http_error);
+      }
 
       if (request_header.method == HTTP_METHOD_POST) {
         /*
@@ -493,8 +555,7 @@ int connection_new(ts_socket_t *sock, int fd)
 #endif
 
   /* Close the connection. */
-  shutdown(fd, SHUT_RDWR);
-  close(fd);
+  connection_close(fd);
 
   return 0;
 }

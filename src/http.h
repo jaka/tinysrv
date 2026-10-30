@@ -102,7 +102,7 @@ static const ps_http_status_t http_statuses[] = {
     {400, "Bad Request"},
     {403, "Forbidden"},
     {404, "Not Found"},
-    {501, "Method Not Implemented"},
+    {501, "Not Implemented"},
     {0, NULL}};
 
 int http_header_parse(ps_http_request_header_t *, char *, int *);

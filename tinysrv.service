@@ -5,6 +5,7 @@ After=network.target
 [Service]
 # The binary daemonizes on its own, so Type=forking (do NOT pass -f in $ARGS).
 Type=forking
+PIDFile=/run/tinysrv/tinysrv.pid
 
 # Working directory for the pidfile / writable runtime state, owned by User=.
 RuntimeDirectory=tinysrv
@@ -12,9 +13,13 @@ RuntimeDirectoryMode=0770
 
 # Optional file that sets ARGS=..., e.g.:
 #   ARGS=-p 80 -S /var/www/ 0.0.0.0
-#   ARGS=-k 443 -C /etc/ssl/tinysrv.pem -p 80 -S /var/www/ 0.0.0.0
-EnvironmentFile=-/run/tinysrv/tinysrv.args
-ExecStart=/usr/local/bin/tinysrv $ARGS
+#   ARGS=-k 443 -C /etc/tinysrv/certs/ 0.0.0.0 -p 80 -S /var/www/ 0.0.0.0
+# Options apply to the IP address that follows them, so each socket ends with its own IP.
+# -C is a directory of PEM files (certificate + key) named after the host with dots
+# replaced by underscores, e.g. example_com, or +_example_com for *.example.com.
+# The PID file is set below, so do not pass -P in $ARGS.
+EnvironmentFile=-/etc/default/tinysrv.args
+ExecStart=/usr/local/bin/tinysrv -P /run/tinysrv/tinysrv.pid $ARGS
 
 User=tinysrv
 Group=tinysrv

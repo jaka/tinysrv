@@ -35,7 +35,7 @@ sudo make install
 ```
 This installs `/usr/local/bin/tinysrv` and `/usr/local/lib/systemd/system/tinysrv.service`. Override the locations with `PREFIX=` and `DESTDIR=` (and remove them again with `sudo make uninstall`).
 
-Provide the addresses and options through the environment file referenced by the unit, e.g. `/run/tinysrv/tinysrv.args`:
+Provide the addresses and options through the environment file referenced by the unit, e.g. `/etc/default/tinysrv.args`:
 ```
 ARGS=-p 80 -S /var/www/ 0.0.0.0
 ```

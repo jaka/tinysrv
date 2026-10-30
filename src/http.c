@@ -137,6 +137,8 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   /* Determine the length of the Request-Line (first line in HTTP request). */
   str = tu_strbtok(&line, &line_length, "\r\n");
   if (line_length < 12) return -1;
+  /* Terminate the Request-Line so parsing cannot run into the header fields. */
+  str[line_length] = 0;
 
   /* Parse HTTP method. */
   tok = tu_strtok(&str, &tok_length, " \t");
@@ -162,6 +164,7 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
   /* Parse HTTP Request-URI. */
   if (*str != '/') return -1;
   tok = tu_strtok(&str, &tok_length, " \t");
+  if (!tok_length) return -1;
   header->filename = strndup(tok, tok_length);
   if (!header->filename) return -1;
   header->query = header->filename + tok_length;
@@ -170,8 +173,9 @@ int http_header_parse(ps_http_request_header_t *header, char *buffer, int *error
 
   while (*str == ' ' || *str == '\t') str++;
 
-  /* Parse HTTP version. */
-  tok = tu_strbtok(&str, &tok_length, "\r\n");
+  /* Parse HTTP version (rest of the Request-Line). */
+  tok = str;
+  tok_length = strlen(tok);
   DEBUG_PRINT("Got HTTP version: %.*s", tok_length, tok);
   if (tok_length != 8) return -1;
 

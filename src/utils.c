@@ -8,11 +8,12 @@ char *tu_strtok(char **str, unsigned int *match_length, const char *delimiters)
   char *scan, *start;
   const char *delim;
 
-  if (!str || !*str || !match_length) return NULL;
-  if (!*delimiters) return NULL;
+  /* Report no match on every early exit; callers test the length, not the pointer. */
+  if (!match_length) return NULL;
+  *match_length = 0;
+  if (!str || !*str || !*delimiters) return NULL;
 
   start = *str;
-  *match_length = 0;
 
   for (scan = *str; *scan; scan++) {
     for (delim = delimiters; *delim; delim++) {
@@ -34,8 +35,9 @@ char *tu_strbtok(char **str, unsigned int *match_length, const char *delimiter)
   char *start_ptr;
   unsigned int cur_delimiter, delimiter_length;
 
-  if (!str || !*str || !match_length) return NULL;
+  if (!match_length) return NULL;
   *match_length = 0;
+  if (!str || !*str) return NULL;
 
   delimiter_length = strlen(delimiter);
   if (!delimiter_length) return NULL;
@@ -98,8 +100,7 @@ static char from_hex(const char ch)
 void decode_url(char *to, const char *from)
 {
   while (*from) {
-    /* TODO: [1] and [2] may not exist */
-    if (*from == '%' && from[1] && from[2] && isxdigit(from[1]) && isxdigit(from[2])) {
+    if (*from == '%' && from[1] && from[2] && isxdigit((unsigned char)from[1]) && isxdigit((unsigned char)from[2])) {
       *to++ = from_hex(*(from + 1)) << 4 | from_hex(*(from + 2));
       from += 3;
       continue;
@@ -128,6 +129,10 @@ int change_dots_to_underscore(char *const str)
 int is_safe_filename(const char *const str)
 {
   char *strp;
+
+  /* Refuse hidden files (last path component starting with a dot). */
+  strp = strrchr((char *)str, '/');
+  if (strp && *(strp + 1) == '.') return 0;
 
   for (strp = (char *)str; *strp; strp++) {
     if (!isprint((unsigned char)*strp) || *strp == '%') return 0;

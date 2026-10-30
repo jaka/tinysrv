@@ -118,15 +118,13 @@ int ts_ssl_session_init(struct ts_ssl *ssl, int fd)
   if (!ssl->context) return -1;
 
   SSL_CTX_set_min_proto_version(ssl->context, TLS1_2_VERSION);
-  SSL_CTX_set_options(ssl->context, SSL_MODE_RELEASE_BUFFERS | SSL_OP_NO_COMPRESSION);
+  SSL_CTX_set_options(ssl->context, SSL_OP_NO_COMPRESSION);
   SSL_CTX_set_tlsext_servername_callback(ssl->context, ts_ssl_servername_cb);
   SSL_CTX_set_tlsext_servername_arg(ssl->context, ssl);
 
+  /* On failure ssl->context is released by ts_ssl_session_close(). */
   ssl->s = SSL_new(ssl->context);
-  if (!ssl->s) {
-    SSL_CTX_free(ssl->context);
-    return -1;
-  }
+  if (!ssl->s) return -1;
 
   SSL_set_fd(ssl->s, fd);
 

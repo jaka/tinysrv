@@ -132,6 +132,7 @@ static int ts_listen(ts_socket_t *sock)
   int nfds, sockfd, select_rv;
   ts_socket_t *cur_sock, *ready;
   fd_set readfds, selectfds;
+  struct timeval timeout;
 
   nfds = 0;
   FD_ZERO(&readfds);
@@ -157,20 +158,23 @@ static int ts_listen(ts_socket_t *sock)
     if (select_rv <= 0) {
       DEBUG_PRINT("Waiting for select.");
 
+      /*
+      Wake up periodically to re-check terminated: a signal arriving between the loop
+      check and select() would otherwise leave us blocked until the next connection.
+      */
+      timeout.tv_sec = 1;
+      timeout.tv_usec = 0;
       selectfds = readfds;
-      select_rv = select(nfds, &selectfds, NULL, NULL, NULL);
+      select_rv = select(nfds, &selectfds, NULL, NULL, &timeout);
 
       if (select_rv < 0) {
         if (!terminated) {
           syslog(LOG_ERR, "Child select() returned error: %m.");
           exit(EXIT_FAILURE);
         }
-      }
-      else if (select_rv == 0) {
-        /* Since we did not specify timeout, this should never happen. */
-        syslog(LOG_WARNING, "Child select() returned zero.");
         continue;
       }
+      else if (select_rv == 0) continue;
     }
 
 #ifdef FORK

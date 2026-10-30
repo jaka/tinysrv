@@ -67,7 +67,7 @@ ts_configuration_t *ts_configuration_create(void)
 
 int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
 {
-  int i, error;
+  int i, error, pending;
   ts_socket_t *cur_socket;
 
   cur_socket = ts_socket_new();
@@ -75,9 +75,13 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
 
   /* Process command line arguments. */
   error = 0;
+  pending = 0;
   for (i = 1; i < argc && !error; i++) {
 
     if (argv[i][0] == '-') {
+
+      /* Everything except the global options -f, -P and -u applies to the next IP address. */
+      if (!strchr("fPu", argv[i][1])) pending = 1;
 
       /* Handle arguments that don't require a subsequent argument. */
       switch (argv[i][1]) {
@@ -175,6 +179,7 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
       config->sock = cur_socket;
 
       /* Create new configuration. */
+      pending = 0;
       cur_socket = ts_socket_new();
       if (!cur_socket) {
         error = 1;
@@ -182,6 +187,9 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
       }
     }
   }
+
+  /* Socket options after the last IP address have no address to apply to. */
+  if (config->sock && pending) error = 1;
 
   if (error) {
     ts_socket_free(cur_socket);
