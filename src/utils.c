@@ -130,10 +130,6 @@ int is_safe_filename(const char *const str)
 {
   char *strp;
 
-  /* Refuse hidden files (last path component starting with a dot). */
-  strp = strrchr((char *)str, '/');
-  if (strp && *(strp + 1) == '.') return 0;
-
   for (strp = (char *)str; *strp; strp++) {
     if (!isprint((unsigned char)*strp) || *strp == '%') return 0;
     else if (*strp == '.') {
@@ -141,6 +137,8 @@ int is_safe_filename(const char *const str)
     }
     else if (*strp == '/') {
       if (*(strp + 1) == '/') return 0;
+      /* Refuse hidden files and directories, except a leading /.well-known/ (RFC 8615). */
+      if (*(strp + 1) == '.' && (strp != str || strncmp(strp, "/.well-known/", sizeof("/.well-known/") - 1))) return 0;
     }
   }
   return 1;

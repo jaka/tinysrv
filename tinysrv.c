@@ -158,6 +158,8 @@ static int ts_listen(ts_socket_t *sock)
   }
 #endif
 
+  syslog(LOG_INFO, "Ready to handle up to %d connections at once.", MAX_CONNECTIONS);
+
   while (!terminated) {
 
     /* Watch the listening sockets only while a slot is free; more connections wait in the backlog. */
