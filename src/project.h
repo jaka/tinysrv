@@ -12,9 +12,14 @@
 #define DEFAULT_PORT "8000"
 #define CHAR_BUF_SIZE 8192
 #define MAX_PATH_LENGTH 200
-#define POST_DRAIN_TIMEOUT 1
 #define REQUEST_READ_TIMEOUT_MS 1000
+#define SEND_TIMEOUT_MS 1000
 #define LINGER_TIMEOUT_MS 500
+
+/* Connections handled at once by the single worker; more wait in the listen backlog. */
+#define MAX_CONNECTIONS 10
+/* Bytes of response body sent to one connection per loop round, so others get their turn. */
+#define WRITE_BUDGET 262144
 
 #define TS_BACKLOG SOMAXCONN
 

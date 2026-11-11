@@ -4,7 +4,9 @@
 #include "config.h"
 #include "http.h"
 #include "project.h"
+#include "ssl.h"
 
+#include <sys/select.h>
 #include <sys/types.h>
 
 struct ts_connection {
@@ -16,6 +18,37 @@ struct ts_connection {
 };
 
 typedef struct ts_connection ps_connection_t;
+
+/* Stages of a connection, each advanced without blocking. */
+typedef enum {
+  CS_FREE = 0,  /* slot unused */
+  CS_HANDSHAKE, /* TLS handshake */
+  CS_READ,      /* reading the request header */
+  CS_WRITE,     /* sending the response */
+  CS_LINGER     /* response sent, discarding input until the client closes */
+} ts_client_state;
+
+struct ts_client {
+  ts_client_state state;
+  int fd;
+  /* Wait for the socket to become writable instead of readable. */
+  int want_write;
+  /* Monotonic time in ms at which the current stage times out. */
+  long deadline;
+  ts_socket_t *sock;
+  struct ts_ssl ssl;
+  ps_http_request_header_t request;
+  ps_http_response_header_t response;
+  ps_connection_t connection;
+  /* Request while reading; then the response header; then file chunks for TLS. */
+  char buf[CHAR_BUF_SIZE];
+  int buf_len;
+  int buf_pos;
+  int header_sent;
+  off_t body_sent;
+};
+
+typedef struct ts_client ts_client_t;
 
 static const char content_noSSL[] =
     "\x15"     /* Alert (21) */
@@ -32,6 +65,9 @@ static const char content_jsclose[] =
     "if(self==top){a.close();if(c&&c.length>0){var d=D(c),e=d.split(z).reverse();if(e.length>1){var f='u='+e.slice(0,2).reverse().join(z);b.cookie!=f&&(b.cookie=f,a.history.back())}}}"
     "</script></head></html>";
 
-int connection_new(ts_socket_t *, int);
+int connection_new(ts_client_t *, ts_socket_t *, int);
+void connection_fdset(ts_client_t *, fd_set *, fd_set *, int *, long *);
+void connection_process(ts_client_t *, fd_set *, fd_set *);
+void connection_abort(ts_client_t *);
 
 #endif

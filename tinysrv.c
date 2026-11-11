@@ -127,12 +127,21 @@ static int ts_bind(ts_socket_t *sock)
   return bound ? 0 : -1;
 }
 
+/*
+Serve up to MAX_CONNECTIONS connections at once in this single process. Every socket is
+non-blocking: select() reports which connections can make progress, and each one is
+advanced as far as it can go without waiting, so a slow client never holds up the others.
+*/
 static int ts_listen(ts_socket_t *sock)
 {
   int nfds, sockfd, select_rv;
   ts_socket_t *cur_sock, *ready;
   fd_set readfds, selectfds;
   struct timeval timeout;
+  static ts_client_t clients[MAX_CONNECTIONS];
+  fd_set writefds;
+  int i, maxfd, free_slots;
+  long wait_ms;
 
   nfds = 0;
   FD_ZERO(&readfds);
@@ -149,32 +158,36 @@ static int ts_listen(ts_socket_t *sock)
   }
 #endif
 
-  nfds++;
-
-  select_rv = 0;
   while (!terminated) {
 
-    /* Call select() only if we have something more to process. */
-    if (select_rv <= 0) {
-      DEBUG_PRINT("Waiting for select.");
+    /* Watch the listening sockets only while a slot is free; more connections wait in the backlog. */
+    free_slots = 0;
+    for (i = 0; i < MAX_CONNECTIONS; i++)
+      if (clients[i].state == CS_FREE) free_slots++;
 
-      /*
-      Wake up periodically to re-check terminated: a signal arriving between the loop
-      check and select() would otherwise leave us blocked until the next connection.
-      */
-      timeout.tv_sec = 1;
-      timeout.tv_usec = 0;
-      selectfds = readfds;
-      select_rv = select(nfds, &selectfds, NULL, NULL, &timeout);
+    selectfds = readfds;
+    if (!free_slots) {
+      for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next)
+        if (cur_sock->sockfd >= 0) FD_CLR(cur_sock->sockfd, &selectfds);
+    }
 
-      if (select_rv < 0) {
-        if (!terminated) {
-          syslog(LOG_ERR, "Child select() returned error: %m.");
-          exit(EXIT_FAILURE);
-        }
-        continue;
-      }
-      else if (select_rv == 0) continue;
+    /*
+    Wake up at least once a second to re-check terminated: a signal arriving between the loop
+    check and select() would otherwise leave us blocked until the next event.
+    */
+    wait_ms = 1000;
+    maxfd = nfds;
+    FD_ZERO(&writefds);
+    for (i = 0; i < MAX_CONNECTIONS; i++) connection_fdset(&clients[i], &selectfds, &writefds, &maxfd, &wait_ms);
+
+    timeout.tv_sec = wait_ms / 1000;
+    timeout.tv_usec = (wait_ms % 1000) * 1000;
+    select_rv = select(maxfd + 1, &selectfds, &writefds, NULL, &timeout);
+
+    if (select_rv < 0) {
+      if (errno == EINTR || terminated) continue;
+      syslog(LOG_ERR, "Child select() returned error: %m.");
+      exit(EXIT_FAILURE);
     }
 
 #ifdef FORK
@@ -185,39 +198,33 @@ static int ts_listen(ts_socket_t *sock)
     }
 #endif
 
-    ready = NULL;
+    /* Advance every connection that is ready, or end it when it runs out of time. */
+    for (i = 0; i < MAX_CONNECTIONS; i++) connection_process(&clients[i], &selectfds, &writefds);
+
+    /* Accept new connections into free slots. */
     for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
       if (cur_sock->sockfd < 0) continue;
-      if (FD_ISSET(cur_sock->sockfd, &selectfds)) {
-        ready = cur_sock;
-        select_rv--;
-        FD_CLR(cur_sock->sockfd, &selectfds);
-        break;
+      if (!FD_ISSET(cur_sock->sockfd, &selectfds)) continue;
+      ready = cur_sock;
+
+      for (i = 0; i < MAX_CONNECTIONS; i++) {
+        if (clients[i].state != CS_FREE) continue;
+
+        sockfd = accept4(ready->sockfd, NULL, NULL, SOCK_NONBLOCK);
+        if (sockfd < 0) {
+          /* EAGAIN: no more pending connections, or the client gave up before we accepted. */
+          if (errno != EAGAIN && errno != EWOULDBLOCK) syslog(LOG_WARNING, "Child accept() returned error: %m.");
+          break;
+        }
+
+        DEBUG_PRINT("Starting handling socket %d", sockfd);
+        connection_new(&clients[i], ready, sockfd);
       }
     }
-
-    /* At this point select() should return socket handler, ie. ready != NULL. */
-    if (!ready) {
-      /* This is bad case since select() will never be called again. */
-      syslog(LOG_WARNING, "Child select() returned a value of %d, but no file descriptors of interest are ready for read.", select_rv);
-      /* Set select_rv = 0 so that select() will be called on the next loop iteration. */
-      select_rv = 0;
-      continue;
-    }
-
-    sockfd = accept(ready->sockfd, NULL, NULL);
-    if (sockfd < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        /* Client closed connection before we got a chance to accept it. */
-        DEBUG_PRINT("Child accept(): %d", errno);
-      }
-      else syslog(LOG_WARNING, "Child accept() returned error: %m.");
-      continue;
-    }
-
-    DEBUG_PRINT("Starting handling socket %d", sockfd);
-    connection_new(ready, sockfd);
   }
+
+  /* Shutting down: drop connections still in progress. */
+  for (i = 0; i < MAX_CONNECTIONS; i++) connection_abort(&clients[i]);
 
   return 0;
 }

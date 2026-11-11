@@ -23,7 +23,7 @@ OPTS	+= -DDEBUG
 endif
 ifdef USE_SSL
 OPTS	+= -DUSE_SSL
-LDFLAGS	+= -lssl
+LDFLAGS	+= -lssl -lcrypto
 endif
 
 # Rebuild everything when the compiler or flags change (e.g. USE_SSL, DEBUG).

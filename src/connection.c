@@ -8,7 +8,6 @@
 #include <errno.h>       /* errno */
 #include <fcntl.h>       /* O_RDONLY */
 #include <netinet/tcp.h> /* TCP_CORK */
-#include <poll.h>        /* poll() */
 #include <stdio.h>
 #include <stdlib.h>       /* free(), malloc() */
 #include <string.h>       /* strcasestr() */
@@ -292,17 +291,14 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
   return 0;
 }
 
-static int connection_recv(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
-{
-#ifdef USE_SSL
-  if (sock->options & DO_SSL) return SSL_read(ssl->s, buf, buflen);
-#else
-  (void)sock;
-  (void)ssl;
-#endif /* USE_SSL */
+/* I/O result meaning "not ready yet, wait for the socket and try again". */
+#define IO_AGAIN -2
 
-  return recv(fd, buf, buflen, 0);
-}
+#ifdef USE_SSL
+#define CLIENT_TLS(c) ((c)->sock->options & DO_SSL)
+#else
+#define CLIENT_TLS(c) 0
+#endif
 
 static long monotonic_ms(void)
 {
@@ -312,126 +308,87 @@ static long monotonic_ms(void)
   return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
 }
 
-/*
-Read until the end of the request header (empty line), the buffer is full, the peer stops
-sending or the overall deadline passes. A request may arrive in several TCP segments or TLS
-records. buf must have room for buflen + 1 bytes; the result is NUL terminated.
-*/
-static int connection_read(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
+#ifdef USE_SSL
+/* Map an SSL I/O result to bytes, 0 (closed), -1 (error) or IO_AGAIN, noting what to wait for. */
+static int client_ssl_result(ts_client_t *c, int rv)
 {
-  long deadline;
-  int size, total, scan;
+  if (rv > 0) return rv;
+
+  switch (SSL_get_error(c->ssl.s, rv)) {
+    case SSL_ERROR_WANT_READ:
+      c->want_write = 0;
+      return IO_AGAIN;
+    case SSL_ERROR_WANT_WRITE:
+      c->want_write = 1;
+      return IO_AGAIN;
+    case SSL_ERROR_ZERO_RETURN:
+      return 0;
+    default:
+      return -1;
+  }
+}
+#endif /* USE_SSL */
+
+static int client_recv(ts_client_t *c, char *buf, int buflen)
+{
+  ssize_t rv;
 
 #ifdef USE_SSL
-  if (sock->options & DO_SSL) {
-    ssl->cert_path = sock->cert_path;
-    if (ts_ssl_session_init(ssl, fd) <= 0) return -1;
+  if (CLIENT_TLS(c)) {
+    ERR_clear_error();
+    return client_ssl_result(c, SSL_read(c->ssl.s, buf, buflen));
   }
 #endif /* USE_SSL */
 
-  deadline = monotonic_ms() + REQUEST_READ_TIMEOUT_MS;
-  total = 0;
-  do {
-    size = connection_recv(sock, ssl, fd, buf + total, buflen - total);
-    if (size <= 0) break;
-
-    /* Search only the new data, plus the tail of a terminator split across reads. */
-    scan = total > 3 ? total - 3 : 0;
-    total += size;
-    buf[total] = 0;
-
-    /* TLS handshake on a plain socket, answered by the caller. */
-    if (buf[0] == 0x16) break;
-    if (strstr(buf + scan, "\r\n\r\n")) break;
-  } while (total < buflen && monotonic_ms() < deadline);
-
-  return total ? total : size;
+  rv = recv(c->fd, buf, buflen, 0);
+  if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+    c->want_write = 0;
+    return IO_AGAIN;
+  }
+  return (int)rv;
 }
 
-static ssize_t connection_send(ts_socket_t *sock, struct ts_ssl *ssl, int fd, const char *buf, int buflen, int flags)
+static int client_send(ts_client_t *c, const char *buf, int buflen, int flags)
 {
-#ifdef USE_SSL
-  if (sock->options & DO_SSL) return SSL_write(ssl->s, buf, buflen);
-#else
-  (void)sock;
-  (void)ssl;
-#endif /* USE_SSL */
-  return send(fd, buf, buflen, flags);
-}
-
-static int connection_write(ts_socket_t *sock, struct ts_ssl *ssl, int fd, ps_connection_t *connection)
-{
-  char response_buffer[CHAR_BUF_SIZE];
-  int response_buffer_size, size, flags;
-  char content_length[21];
-  off_t offset;
-  ssize_t sent;
-
-  if (connection->length > -1 && connection->response->status_code != 204) {
-    snprintf(content_length, sizeof(content_length), "%lld", (long long)connection->length);
-    if (http_header_setvalue(connection->response, HEADER_CONTENT_LENGTH, content_length) < 0) {
-      connection->response->status_code = 500;
-      connection->length = 0;
-      connection->str = NULL;
-      if (connection->filefd >= 0) {
-        close(connection->filefd);
-        connection->filefd = -1;
-      }
-    }
-  }
-
-  flags = MSG_NOSIGNAL;
-  if (connection->length > 0) flags |= MSG_MORE;
-
-  /* Output header. */
-  response_buffer_size = http_header_fill(connection->response, response_buffer, sizeof(response_buffer));
-  DEBUG_PRINT("Header length: %d.", response_buffer_size);
-  if (response_buffer_size < 0) {
-    if (connection->filefd >= 0) close(connection->filefd);
-    return -1;
-  }
-
-  size = (int)connection_send(sock, ssl, fd, response_buffer, response_buffer_size, flags);
-
-  if (size < 0) {
-    if (connection->filefd >= 0) close(connection->filefd);
-    return -1;
-  }
-
-  if (connection->filefd >= 0) {
+  ssize_t rv;
 
 #ifdef USE_SSL
-    if (sock->options & DO_SSL)
-      sent = ts_ssl_sendfile(ssl->s, connection->filefd, connection->length);
-    else
+  if (CLIENT_TLS(c)) {
+    ERR_clear_error();
+    return client_ssl_result(c, SSL_write(c->ssl.s, buf, buflen));
+  }
 #endif /* USE_SSL */
-    {
-      /* Output file handle content. */
-      offset = 0;
-      sent = sendfile(fd, connection->filefd, &offset, (size_t)connection->length);
-    }
 
-    close(connection->filefd);
-    connection->filefd = -1;
+  rv = send(c->fd, buf, buflen, MSG_NOSIGNAL | flags);
+  if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+    c->want_write = 1;
+    return IO_AGAIN;
   }
-  else if (connection->str) {
-    /* Output constant buffer. */
-    sent = connection_send(sock, ssl, fd, connection->str, (int)connection->length, MSG_NOSIGNAL);
-  }
-  else return size;
-
-  if (sent < 0) return -1;
-  return size + (int)sent;
+  return (int)rv;
 }
 
-static void connection_drain(ts_socket_t *sock, struct ts_ssl *ssl, int fd, char *buf, int buflen)
+/* Release everything the connection holds and free its slot. */
+static void client_close(ts_client_t *c)
 {
-  time_t deadline = time(NULL) + POST_DRAIN_TIMEOUT;
-  int size;
+  unsigned int index;
 
-  do {
-    size = connection_recv(sock, ssl, fd, buf, buflen);
-  } while (size > 0 && time(NULL) < deadline);
+  if (c->connection.filefd >= 0) close(c->connection.filefd);
+  c->connection.filefd = -1;
+
+  free(c->request.filename);
+  c->request.filename = NULL;
+  for (index = 0; index < HTTP_HEADER_FIELDS; index++) {
+    free(c->response.field[index]);
+    c->response.field[index] = NULL;
+  }
+
+#ifdef USE_SSL
+  if (CLIENT_TLS(c)) ts_ssl_session_close(&c->ssl);
+#endif /* USE_SSL */
+
+  close(c->fd);
+  c->fd = -1;
+  c->state = CS_FREE;
 }
 
 /*
@@ -439,123 +396,346 @@ Lingering close: closing a socket with unread data makes the kernel send RST, wh
 destroy the response before the client has read it. Send FIN first, then discard whatever
 the client still sends until it closes or the deadline passes.
 */
-static void connection_close(int fd)
+static void client_linger(ts_client_t *c)
 {
-  char buf[CHAR_BUF_SIZE];
-  struct pollfd pfd;
-  long deadline, remaining;
-
-  if (!shutdown(fd, SHUT_WR)) {
-    deadline = monotonic_ms() + LINGER_TIMEOUT_MS;
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-    while ((remaining = deadline - monotonic_ms()) > 0) {
-      if (poll(&pfd, 1, (int)remaining) <= 0) break;
-      if (recv(fd, buf, sizeof(buf), MSG_DONTWAIT) <= 0) break;
-    }
-  }
-
-  close(fd);
-}
-
-int connection_new(ts_socket_t *sock, int fd)
-{
-  int yes, http_error, request_buffer_size;
-  unsigned int index;
-  struct timeval timeout;
-  ps_http_request_header_t request_header;
-  ps_http_response_header_t response_header;
-  char request_buffer[CHAR_BUF_SIZE];
-  struct ts_ssl ssl = {0};
-  ps_connection_t connection;
-
-  /*
-  The socket is connected, but we need to perform a check for incoming data.
-  Since we're using blocking checks, we first want to set a timeout.
-  */
-  timeout.tv_sec = 1;
-  timeout.tv_usec = 0;
-  if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
-    close(fd);
-    return -1;
-  }
-  if (setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(struct timeval)) < 0) {
-    close(fd);
-    return -1;
-  }
-
-  yes = 1;
-  setsockopt(fd, IPPROTO_TCP, TCP_CORK, (void *)&yes, sizeof(yes));
-
-  /* Create new connection. */
-  memset(&request_header, 0, sizeof(request_header));
-  memset(&response_header, 0, sizeof(response_header));
-  connection.str = NULL;
-  connection.length = -1;
-  connection.filefd = -1;
-  connection.request = &request_header;
-  connection.response = &response_header;
-
-  DEBUG_PRINT("Reading from socket %d.", fd);
-
-  request_buffer_size = connection_read(sock, &ssl, fd, request_buffer, sizeof(request_buffer) - 1);
-  if (request_buffer_size < 0 && errno != 0) {
-    DEBUG_PRINT("Received errno: %d", errno);
-  }
-
-  if (request_buffer_size > 0) {
-
-    DEBUG_PRINT("Received %d bytes.", request_buffer_size);
-
-    if (request_buffer[0] == 0x16) {
-      send(fd, content_noSSL, sizeof(content_noSSL) - 1, MSG_NOSIGNAL);
-    }
-    else {
-      http_error = 0;
-      /* Header fills the whole buffer without ending: too large to handle. */
-      if (request_buffer_size == sizeof(request_buffer) - 1 && !strstr(request_buffer, "\r\n\r\n")) {
-        http_error = 400;
-      }
-      else {
-        http_header_parse(&request_header, request_buffer, &http_error);
-      }
-
-      if (request_header.method == HTTP_METHOD_POST) {
-        /*
-        Socket may still be opened for reading, so read any data that is still waiting for us.
-        Bound the drain by wall-clock time so a client trickling bytes cannot hold the
-        single worker indefinitely.
-        */
-        connection_drain(sock, &ssl, fd, request_buffer, sizeof(request_buffer) - 1);
-      }
-
-      response_header.version = HTTP_VERSION_10;
-      http_header_setvalue(&response_header, HEADER_CONNECTION, "close");
-
-      if (!http_error) serve(&connection, sock, &http_error);
-
-      /* Free request header structures. */
-      if (request_header.filename) free(request_header.filename);
-
-      if (http_error) response_header.status_code = http_error;
-
-      connection_write(sock, &ssl, fd, &connection);
-
-      /* Free response header structures. */
-      for (index = 0; index < HTTP_HEADER_FIELDS; index++)
-        if (response_header.field[index]) free(response_header.field[index]);
-    }
-  }
+  if (c->connection.filefd >= 0) close(c->connection.filefd);
+  c->connection.filefd = -1;
 
 #ifdef USE_SSL
-  if (sock->options & DO_SSL) {
-    DEBUG_PRINT("Closing down ssl");
-    ts_ssl_session_close(&ssl);
+  if (CLIENT_TLS(c)) ts_ssl_session_close(&c->ssl);
+#endif /* USE_SSL */
+
+  if (shutdown(c->fd, SHUT_WR)) {
+    client_close(c);
+    return;
   }
-#endif
 
-  /* Close the connection. */
-  connection_close(fd);
+  c->state = CS_LINGER;
+  c->want_write = 0;
+  c->deadline = monotonic_ms() + LINGER_TIMEOUT_MS;
+}
 
+static void client_discard(ts_client_t *c)
+{
+  int i;
+  ssize_t rv;
+
+  /* Bounded, so a client flooding data cannot keep the loop here. */
+  for (i = 0; i < 16; i++) {
+    rv = recv(c->fd, c->buf, sizeof(c->buf), MSG_DONTWAIT);
+    if (rv > 0) continue;
+    if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return;
+    client_close(c);
+    return;
+  }
+}
+
+static void client_write(ts_client_t *c)
+{
+  ps_connection_t *connection = &c->connection;
+  long budget = WRITE_BUDGET;
+  off_t offset, remaining;
+  int rv;
+
+  /* Response header, or the TLS alert on a plain socket. */
+  while (!c->header_sent) {
+    rv = client_send(c, c->buf + c->buf_pos, c->buf_len - c->buf_pos, connection->length > 0 ? MSG_MORE : 0);
+    if (rv == IO_AGAIN) return;
+    if (rv <= 0) {
+      client_close(c);
+      return;
+    }
+    c->buf_pos += rv;
+    c->deadline = monotonic_ms() + SEND_TIMEOUT_MS;
+    if (c->buf_pos == c->buf_len) {
+      c->header_sent = 1;
+      c->buf_pos = c->buf_len = 0;
+    }
+  }
+
+  /* Body: a file or a constant buffer, a bounded amount per round so other connections get their turn. */
+  if (connection->filefd >= 0 || connection->str) {
+    while (c->body_sent < connection->length) {
+      if (budget <= 0) {
+        c->want_write = 1;
+        return;
+      }
+
+      remaining = connection->length - c->body_sent;
+
+      if (connection->filefd < 0) {
+        /* Constant buffer: SSL_write retries need the same length, so always send the rest. */
+        rv = client_send(c, connection->str + c->body_sent, (int)remaining, 0);
+      }
+#ifdef USE_SSL
+      else if (CLIENT_TLS(c)) {
+        /* Read the next chunk once the previous one is sent; SSL_write retries reuse it as is. */
+        if (c->buf_pos == c->buf_len) {
+          rv = (int)pread(connection->filefd, c->buf, remaining > (off_t)sizeof(c->buf) ? sizeof(c->buf) : (size_t)remaining, c->body_sent);
+          if (rv <= 0) {
+            /* Read error, or the file shrank since it was opened. */
+            client_close(c);
+            return;
+          }
+          c->buf_len = rv;
+          c->buf_pos = 0;
+        }
+        rv = client_send(c, c->buf + c->buf_pos, c->buf_len - c->buf_pos, 0);
+        if (rv > 0) c->buf_pos += rv;
+      }
+#endif /* USE_SSL */
+      else {
+        offset = c->body_sent;
+        rv = (int)sendfile(c->fd, connection->filefd, &offset, (size_t)(remaining > budget ? budget : remaining));
+        if (rv < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+          c->want_write = 1;
+          rv = IO_AGAIN;
+        }
+      }
+
+      if (rv == IO_AGAIN) return;
+      if (rv <= 0) {
+        /* Send error, or sendfile() found the file shorter than when it was opened. */
+        client_close(c);
+        return;
+      }
+
+      c->body_sent += rv;
+      budget -= rv;
+      c->deadline = monotonic_ms() + SEND_TIMEOUT_MS;
+    }
+  }
+
+  client_linger(c);
+}
+
+/* Parse the request that has been read, prepare the response and start sending it. */
+static void client_respond(ts_client_t *c)
+{
+  ps_connection_t *connection = &c->connection;
+  int http_error, yes;
+  unsigned int index;
+  char content_length[21];
+
+  DEBUG_PRINT("Received %d bytes on socket %d.", c->buf_len, c->fd);
+
+  /*
+  Cork only the response, so header and body go out in full segments; the shutdown at the end
+  flushes the rest. Corking earlier would hold back the small TLS handshake messages for up to
+  200 ms each.
+  */
+  yes = 1;
+  setsockopt(c->fd, IPPROTO_TCP, TCP_CORK, (void *)&yes, sizeof(yes));
+
+  if (!CLIENT_TLS(c) && c->buf[0] == 0x16) {
+    /* TLS handshake on a plain socket: answer with an alert instead of an HTTP response. */
+    memcpy(c->buf, content_noSSL, sizeof(content_noSSL) - 1);
+    c->buf_len = sizeof(content_noSSL) - 1;
+  }
+  else {
+    http_error = 0;
+    /* Header fills the whole buffer without ending: too large to handle. */
+    if (c->buf_len == sizeof(c->buf) - 1 && !strstr(c->buf, "\r\n\r\n")) {
+      http_error = 400;
+    }
+    else {
+      http_header_parse(&c->request, c->buf, &http_error);
+    }
+
+    c->response.version = HTTP_VERSION_10;
+    http_header_setvalue(&c->response, HEADER_CONNECTION, "close");
+
+    /* A POST body, like any other unread input, is discarded by the lingering close. */
+    if (!http_error) serve(connection, c->sock, &http_error);
+
+    /* Free request header structures. */
+    free(c->request.filename);
+    c->request.filename = NULL;
+
+    if (http_error) c->response.status_code = http_error;
+
+    if (connection->length > -1 && c->response.status_code != 204) {
+      snprintf(content_length, sizeof(content_length), "%lld", (long long)connection->length);
+      if (http_header_setvalue(&c->response, HEADER_CONTENT_LENGTH, content_length) < 0) {
+        c->response.status_code = 500;
+        connection->length = 0;
+        connection->str = NULL;
+        if (connection->filefd >= 0) {
+          close(connection->filefd);
+          connection->filefd = -1;
+        }
+      }
+    }
+
+    /* The request is no longer needed, so the buffer now holds the response header. */
+    c->buf_len = http_header_fill(&c->response, c->buf, sizeof(c->buf));
+    DEBUG_PRINT("Header length: %d.", c->buf_len);
+
+    /* Free response header structures. */
+    for (index = 0; index < HTTP_HEADER_FIELDS; index++) {
+      free(c->response.field[index]);
+      c->response.field[index] = NULL;
+    }
+
+    if (c->buf_len < 0) {
+      client_close(c);
+      return;
+    }
+  }
+
+  c->state = CS_WRITE;
+  c->want_write = 1;
+  c->buf_pos = 0;
+  c->header_sent = 0;
+  c->body_sent = 0;
+  c->deadline = monotonic_ms() + SEND_TIMEOUT_MS;
+  client_write(c);
+}
+
+/*
+Read until the end of the request header (empty line), the buffer is full or the peer stops
+sending. A request may arrive in several TCP segments or TLS records. The buffer keeps room
+for a terminating NUL.
+*/
+static void client_read(ts_client_t *c)
+{
+  int rv, scan;
+
+  for (;;) {
+    if (c->buf_len >= (int)sizeof(c->buf) - 1) {
+      client_respond(c);
+      return;
+    }
+
+    rv = client_recv(c, c->buf + c->buf_len, sizeof(c->buf) - 1 - c->buf_len);
+    if (rv == IO_AGAIN) return;
+    if (rv <= 0) {
+      /* Peer closed or failed: answer what we have, if anything. */
+      if (c->buf_len > 0) client_respond(c);
+      else client_close(c);
+      return;
+    }
+
+    /* Search only the new data, plus the tail of a terminator split across reads. */
+    scan = c->buf_len > 3 ? c->buf_len - 3 : 0;
+    c->buf_len += rv;
+    c->buf[c->buf_len] = 0;
+
+    /* TLS handshake on a plain socket, answered by client_respond(). */
+    if ((!CLIENT_TLS(c) && c->buf[0] == 0x16) || strstr(c->buf + scan, "\r\n\r\n")) {
+      client_respond(c);
+      return;
+    }
+  }
+}
+
+static void client_start_read(ts_client_t *c)
+{
+  c->state = CS_READ;
+  c->want_write = 0;
+  c->deadline = monotonic_ms() + REQUEST_READ_TIMEOUT_MS;
+  client_read(c);
+}
+
+#ifdef USE_SSL
+static void client_handshake(ts_client_t *c)
+{
+  int rv;
+
+  ERR_clear_error();
+  rv = SSL_accept(c->ssl.s);
+  if (rv == 1) {
+    client_start_read(c);
+    return;
+  }
+  if (client_ssl_result(c, rv) == IO_AGAIN) return;
+
+  client_close(c);
+}
+#endif /* USE_SSL */
+
+/* Take over an accepted, non-blocking socket into a free slot and start handling it. */
+int connection_new(ts_client_t *c, ts_socket_t *sock, int fd)
+{
+  memset(c, 0, sizeof(*c));
+  c->fd = fd;
+  c->sock = sock;
+  c->connection.str = NULL;
+  c->connection.length = -1;
+  c->connection.filefd = -1;
+  c->connection.request = &c->request;
+  c->connection.response = &c->response;
+
+  DEBUG_PRINT("Handling socket %d.", fd);
+
+#ifdef USE_SSL
+  if (CLIENT_TLS(c)) {
+    c->ssl.cert_path = sock->cert_path;
+    if (ts_ssl_session_init(&c->ssl, fd) < 0) {
+      client_close(c);
+      return -1;
+    }
+    c->state = CS_HANDSHAKE;
+    c->deadline = monotonic_ms() + REQUEST_READ_TIMEOUT_MS;
+    client_handshake(c);
+    return 0;
+  }
+#endif /* USE_SSL */
+
+  client_start_read(c);
   return 0;
+}
+
+/* Add the connection's socket to the sets to wait on, and shorten the wait to its deadline. */
+void connection_fdset(ts_client_t *c, fd_set *readfds, fd_set *writefds, int *maxfd, long *wait_ms)
+{
+  long left;
+
+  if (c->state == CS_FREE) return;
+
+  FD_SET(c->fd, c->want_write ? writefds : readfds);
+  if (c->fd > *maxfd) *maxfd = c->fd;
+
+  left = c->deadline - monotonic_ms();
+  if (left < 0) left = 0;
+  if (left < *wait_ms) *wait_ms = left;
+}
+
+/* Advance the connection if its socket is ready, and end it once its stage runs out of time. */
+void connection_process(ts_client_t *c, fd_set *readfds, fd_set *writefds)
+{
+  if (c->state == CS_FREE) return;
+
+  if (FD_ISSET(c->fd, readfds) || FD_ISSET(c->fd, writefds)) {
+    switch (c->state) {
+#ifdef USE_SSL
+      case CS_HANDSHAKE:
+        client_handshake(c);
+        break;
+#endif /* USE_SSL */
+      case CS_READ:
+        client_read(c);
+        break;
+      case CS_WRITE:
+        client_write(c);
+        break;
+      case CS_LINGER:
+        client_discard(c);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (c->state != CS_FREE && monotonic_ms() >= c->deadline) {
+    DEBUG_PRINT("Socket %d timed out in state %d.", c->fd, c->state);
+    /* Out of time while reading: answer what has arrived (usually 400), as before. */
+    if (c->state == CS_READ && c->buf_len > 0) client_respond(c);
+    else client_close(c);
+  }
+}
+
+void connection_abort(ts_client_t *c)
+{
+  if (c->state != CS_FREE) client_close(c);
 }

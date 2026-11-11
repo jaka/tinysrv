@@ -1,6 +1,6 @@
 # tinysrv
 
-Tinysrv is a small single process webserver with support for TLS that responds with empty content of proper content-type if requested file is not found.
+Tinysrv is a small single process webserver with support for TLS that responds with empty content of proper content-type if requested file is not found. It handles up to 10 connections at once without blocking, so a slow client does not hold up the others (`MAX_CONNECTIONS` in `src/project.h`).
 
 ### usage
 Start tinysrv in **f**oreground on **p**ort 8080.

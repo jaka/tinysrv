@@ -5,7 +5,6 @@
 
 #include <ctype.h> /* tolower() */
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h> /* struct stat */
 
 static int ts_ssl_loadcert(SSL *s, struct ts_ssl *ssl, const char *file)
@@ -85,33 +84,10 @@ free_all:
   return rv;
 }
 
-int ts_ssl_sendfile(SSL *s, int filefd, off_t filesize)
-{
-  unsigned char *buf;
-  off_t written, remaining_size;
-  int len, rv;
-
-  if (filesize <= 0) return 0;
-
-  buf = mmap(0, (size_t)filesize, PROT_READ, MAP_PRIVATE, filefd, 0);
-  if (buf == MAP_FAILED) return -1;
-
-  written = 0;
-  for (remaining_size = filesize; remaining_size > 0;) {
-    len = remaining_size > MAX_SEND_BUFFER_SIZE ? MAX_SEND_BUFFER_SIZE : (int)remaining_size;
-
-    rv = SSL_write(s, buf + written, len);
-    if (rv <= 0) break;
-
-    written += rv;
-    remaining_size -= rv;
-  }
-
-  munmap(buf, (size_t)filesize);
-
-  return remaining_size > 0 ? -1 : (int)written;
-}
-
+/*
+Prepare a TLS session on a non-blocking socket. The handshake itself (SSL_accept) is driven
+by the caller as the socket becomes ready. Returns 0 on success, -1 on failure.
+*/
 int ts_ssl_session_init(struct ts_ssl *ssl, int fd)
 {
   ssl->context = SSL_CTX_new(TLS_server_method());
@@ -126,10 +102,10 @@ int ts_ssl_session_init(struct ts_ssl *ssl, int fd)
   ssl->s = SSL_new(ssl->context);
   if (!ssl->s) return -1;
 
-  SSL_set_fd(ssl->s, fd);
+  if (!SSL_set_fd(ssl->s, fd)) return -1;
 
   ssl->subcontext = NULL;
-  return SSL_accept(ssl->s);
+  return 0;
 }
 
 int ts_ssl_session_close(struct ts_ssl *ssl)
