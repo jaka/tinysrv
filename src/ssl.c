@@ -6,6 +6,7 @@
 #include <ctype.h> /* tolower() */
 #include <string.h>
 #include <sys/stat.h> /* struct stat */
+#include <syslog.h>   /* syslog() */
 
 static int ts_ssl_loadcert(SSL *s, struct ts_ssl *ssl, const char *file)
 {
@@ -13,8 +14,14 @@ static int ts_ssl_loadcert(SSL *s, struct ts_ssl *ssl, const char *file)
   if (!ssl->subcontext) return SSL_TLSEXT_ERR_ALERT_FATAL;
 
   SSL_CTX_set_options(ssl->subcontext, SSL_OP_SINGLE_DH_USE);
+  /*
+  A key of another type than the certificate (e.g. EC key, RSA certificate) loads without
+  error, so check the pair explicitly. Log it: the client only sees a failed handshake.
+  */
   if (SSL_CTX_use_certificate_file(ssl->subcontext, file, SSL_FILETYPE_PEM) <= 0 ||
-      SSL_CTX_use_PrivateKey_file(ssl->subcontext, file, SSL_FILETYPE_PEM) <= 0) {
+      SSL_CTX_use_PrivateKey_file(ssl->subcontext, file, SSL_FILETYPE_PEM) <= 0 ||
+      !SSL_CTX_check_private_key(ssl->subcontext)) {
+    syslog(LOG_ERR, "Cannot use certificate file %s: missing or mismatched certificate or key.", file);
     return SSL_TLSEXT_ERR_ALERT_FATAL;
   }
 

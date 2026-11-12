@@ -251,7 +251,10 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
     return 0;
   }
 
-  /* Serve a real file. */
+  /*
+  Serve a real file. On failure handle_file() may leave a status (400, 403, 501) behind; by
+  design it is not final: the redirect, JS close, 404 or placeholder below always replace it.
+  */
   if (sock->serve_path_length > 0 && is_safe_filename(filename) && !handle_file(connection, sock, filename)) {
     if (http_header_setvalue(connection->response, HEADER_CONTENT_TYPE, mime->typestr) < 0) {
       if (connection->filefd >= 0) close(connection->filefd);
@@ -403,7 +406,15 @@ static void client_linger(ts_client_t *c)
   c->connection.filefd = -1;
 
 #ifdef USE_SSL
-  if (CLIENT_TLS(c)) ts_ssl_session_close(&c->ssl);
+  if (CLIENT_TLS(c)) {
+    /*
+    Send close_notify so the client sees a clean end of the TLS stream. One attempt only:
+    we don't wait for the client's close_notify, and a full send buffer just skips it.
+    */
+    ERR_clear_error();
+    SSL_shutdown(c->ssl.s);
+    ts_ssl_session_close(&c->ssl);
+  }
 #endif /* USE_SSL */
 
   if (shutdown(c->fd, SHUT_WR)) {
