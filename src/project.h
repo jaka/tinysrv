@@ -20,6 +20,8 @@
 #define MAX_CONNECTIONS 10
 /* Bytes of response body sent to one connection per loop round, so others get their turn. */
 #define WRITE_BUDGET 262144
+/* Pause before accepting again when out of file descriptors or memory. */
+#define ACCEPT_RETRY_MS 100
 
 #define TS_BACKLOG SOMAXCONN
 

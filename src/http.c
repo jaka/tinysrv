@@ -102,6 +102,9 @@ static char *http_header_find(char *header_start, const char *key, unsigned int 
       line_length--;
     }
 
+    /* Optional whitespace after the value is not part of it (RFC 9110). */
+    while (line_length && (str[line_length - 1] == ' ' || str[line_length - 1] == '\t')) line_length--;
+
     if (value_length) *value_length = line_length;
     return str;
   }

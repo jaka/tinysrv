@@ -300,12 +300,13 @@ static int serve(ps_connection_t *connection, ts_socket_t *sock, int *error)
 #define CLIENT_TLS(c) 0
 #endif
 
-static long monotonic_ms(void)
+/* 64-bit even where long is 32-bit, which would overflow after 24.8 days of uptime. */
+long long monotonic_ms(void)
 {
   struct timespec ts;
 
   clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+  return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000L;
 }
 
 #ifdef USE_SSL
@@ -689,7 +690,7 @@ int connection_new(ts_client_t *c, ts_socket_t *sock, int fd)
 /* Add the connection's socket to the sets to wait on, and shorten the wait to its deadline. */
 void connection_fdset(ts_client_t *c, fd_set *readfds, fd_set *writefds, int *maxfd, long *wait_ms)
 {
-  long left;
+  long long left;
 
   if (c->state == CS_FREE) return;
 

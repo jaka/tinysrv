@@ -34,7 +34,7 @@ struct ts_client {
   /* Wait for the socket to become writable instead of readable. */
   int want_write;
   /* Monotonic time in ms at which the current stage times out. */
-  long deadline;
+  long long deadline;
   ts_socket_t *sock;
   struct ts_ssl ssl;
   ps_http_request_header_t request;
@@ -69,5 +69,6 @@ int connection_new(ts_client_t *, ts_socket_t *, int);
 void connection_fdset(ts_client_t *, fd_set *, fd_set *, int *, long *);
 void connection_process(ts_client_t *, fd_set *, fd_set *);
 void connection_abort(ts_client_t *);
+long long monotonic_ms(void);
 
 #endif

@@ -135,13 +135,14 @@ advanced as far as it can go without waiting, so a slow client never holds up th
 static int ts_listen(ts_socket_t *sock)
 {
   int nfds, sockfd, select_rv;
-  ts_socket_t *cur_sock, *ready;
+  ts_socket_t *cur_sock;
   fd_set readfds, selectfds;
   struct timeval timeout;
   static ts_client_t clients[MAX_CONNECTIONS];
   fd_set writefds;
-  int i, maxfd, free_slots;
+  int i, maxfd, free_slots, accept_failing;
   long wait_ms;
+  long long accept_resume, paused_ms;
 
   nfds = 0;
   FD_ZERO(&readfds);
@@ -160,6 +161,9 @@ static int ts_listen(ts_socket_t *sock)
 
   syslog(LOG_INFO, "Ready to handle up to %d connections at once.", MAX_CONNECTIONS);
 
+  accept_failing = 0;
+  accept_resume = 0;
+
   while (!terminated) {
 
     /* Watch the listening sockets only while a slot is free; more connections wait in the backlog. */
@@ -167,17 +171,22 @@ static int ts_listen(ts_socket_t *sock)
     for (i = 0; i < MAX_CONNECTIONS; i++)
       if (clients[i].state == CS_FREE) free_slots++;
 
-    selectfds = readfds;
-    if (!free_slots) {
-      for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next)
-        if (cur_sock->sockfd >= 0) FD_CLR(cur_sock->sockfd, &selectfds);
-    }
-
     /*
     Wake up at least once a second to re-check terminated: a signal arriving between the loop
     check and select() would otherwise leave us blocked until the next event.
     */
     wait_ms = 1000;
+
+    /* After accept() ran out of resources, leave the listeners alone until the pause is over. */
+    paused_ms = accept_failing ? accept_resume - monotonic_ms() : 0;
+    if (paused_ms > 0 && paused_ms < wait_ms) wait_ms = paused_ms;
+
+    selectfds = readfds;
+    if (!free_slots || paused_ms > 0) {
+      for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next)
+        if (cur_sock->sockfd >= 0) FD_CLR(cur_sock->sockfd, &selectfds);
+    }
+
     maxfd = nfds;
     FD_ZERO(&writefds);
     for (i = 0; i < MAX_CONNECTIONS; i++) connection_fdset(&clients[i], &selectfds, &writefds, &maxfd, &wait_ms);
@@ -207,20 +216,32 @@ static int ts_listen(ts_socket_t *sock)
     for (cur_sock = sock; cur_sock; cur_sock = cur_sock->next) {
       if (cur_sock->sockfd < 0) continue;
       if (!FD_ISSET(cur_sock->sockfd, &selectfds)) continue;
-      ready = cur_sock;
 
       for (i = 0; i < MAX_CONNECTIONS; i++) {
         if (clients[i].state != CS_FREE) continue;
 
-        sockfd = accept4(ready->sockfd, NULL, NULL, SOCK_NONBLOCK);
+        sockfd = accept4(cur_sock->sockfd, NULL, NULL, SOCK_NONBLOCK);
         if (sockfd < 0) {
-          /* EAGAIN: no more pending connections, or the client gave up before we accepted. */
-          if (errno != EAGAIN && errno != EWOULDBLOCK) syslog(LOG_WARNING, "Child accept() returned error: %m.");
+          if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS || errno == ENOMEM) {
+            /*
+            The connection stays queued and the listener stays readable, so retrying at once
+            would spin. Pause, and log only the first failure until an accept succeeds again.
+            */
+            if (!accept_failing) syslog(LOG_WARNING, "Child accept() returned error: %m. Pausing new connections.");
+            accept_failing = 1;
+            accept_resume = monotonic_ms() + ACCEPT_RETRY_MS;
+          }
+          /* EAGAIN: no more pending connections; ECONNABORTED: the client gave up before we accepted. */
+          else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != ECONNABORTED && errno != EINTR)
+            syslog(LOG_WARNING, "Child accept() returned error: %m.");
           break;
         }
 
+        if (accept_failing) syslog(LOG_INFO, "Accepting new connections again.");
+        accept_failing = 0;
+
         DEBUG_PRINT("Starting handling socket %d", sockfd);
-        connection_new(&clients[i], ready, sockfd);
+        connection_new(&clients[i], cur_sock, sockfd);
       }
     }
   }
