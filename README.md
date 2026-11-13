@@ -18,6 +18,27 @@ Serve only real files, without empty placeholder responses, so a missing file re
 ./tinysrv -f -F -p 8080 -S /var/www/
 ```
 
+### TLS certificates
+Serve HTTPS on port 443 with certificates from `/etc/ssl-deploy` (build with `make USE_SSL=1`):
+```
+./tinysrv -k 443 -C /etc/ssl-deploy -S /var/www 10.0.0.2
+```
+
+For every connection, tinysrv picks the certificate by the host name the client asks for (SNI). The certificate directory holds one file per host name. The file is named after the host name in lower case, with dots replaced by `_` and no extension, and contains the certificate (with its chain) followed by the private key. A wildcard certificate replaces the first label with `+`:
+
+| host name | certificate file |
+|---|---|
+| `www.example.com` | `www_example_com` |
+| `*.example.com` | `+_example_com` |
+
+Create it from a Let's Encrypt certificate:
+```
+sudo sh -c 'umask 077; cat /etc/letsencrypt/live/www.example.com/fullchain.pem \
+  /etc/letsencrypt/live/www.example.com/privkey.pem > /etc/ssl-deploy/www_example_com'
+sudo chown tinysrv /etc/ssl-deploy/www_example_com
+```
+The file is read on every TLS handshake by the user given with `-u`, so that user must be able to read it, and a renewed certificate is used without a restart. Repeat the `cat` after every renewal, e.g. from a certbot deploy hook in `/etc/letsencrypt/renewal-hooks/deploy/`.
+
 ### development
 ```
 apt-get update

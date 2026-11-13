@@ -156,7 +156,7 @@ int ts_concatenate_path_filename(char *buf, const int buflen, const char *path, 
 
   *p = 0;
 
-  /* copy path if present */
+  /* copy path if present; the configuration already ends it with '/' */
   if (path && *path) {
     len = (int)strlen(path);
     if (len >= remaining) return -1;
@@ -164,13 +164,6 @@ int ts_concatenate_path_filename(char *buf, const int buflen, const char *path, 
     memcpy(p, path, len);
     p += len;
     remaining -= len;
-
-    /* ensure trailing '/' */
-    if (*(p - 1) != '/') {
-      if (remaining < 2) return -1; /* '/' + '\0' */
-      *p++ = '/';
-      remaining--;
-    }
     *p = 0;
   }
 

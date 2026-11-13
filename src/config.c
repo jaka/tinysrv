@@ -1,7 +1,10 @@
 #include "config.h"
 
+#include <errno.h>
+#include <stdio.h>  /* fprintf() */
 #include <stdlib.h> /* free(), malloc() */
 #include <string.h>
+#include <sys/stat.h> /* stat() */
 #include <syslog.h>
 
 static void ts_socket_load_defaults(ts_socket_t *sock)
@@ -33,6 +36,38 @@ static int set_string(char **dst, const char *src)
   if (*dst) free(*dst);
   *dst = copy;
   return 0;
+}
+
+/*
+Store a directory option with a trailing '/', so file names can be appended directly. Refuse
+a path that is not a directory at startup; otherwise every request would silently fail.
+Returns the stored length, or -1.
+*/
+static int set_directory(char **dst, const char *src, const char option)
+{
+  struct stat st;
+  size_t len;
+  char *copy;
+
+  if (stat(src, &st) < 0) {
+    fprintf(stderr, "ERROR: -%c %s: %s.\n", option, src, strerror(errno));
+    return -1;
+  }
+  if (!S_ISDIR(st.st_mode)) {
+    fprintf(stderr, "ERROR: -%c %s: %s.\n", option, src, strerror(ENOTDIR));
+    return -1;
+  }
+
+  len = strlen(src);
+  copy = malloc(len + 2);
+  if (!copy) return -1;
+  memcpy(copy, src, len);
+  if (copy[len - 1] != '/') copy[len++] = '/';
+  copy[len] = 0;
+
+  free(*dst);
+  *dst = copy;
+  return (int)len;
 }
 
 static int ts_socket_free(ts_socket_t *sock)
@@ -67,7 +102,7 @@ ts_configuration_t *ts_configuration_create(void)
 
 int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
 {
-  int i, error, pending;
+  int i, error, pending, rv;
   ts_socket_t *cur_socket;
 
   cur_socket = ts_socket_new();
@@ -139,22 +174,13 @@ int ts_configuration_parse(ts_configuration_t *config, int argc, char **argv)
             continue;
 
           case 'S':
-            if (set_string(&cur_socket->serve_path, argv[i]) < 0) {
-              error = 1;
-              continue;
-            }
-            /* TODO: Clean and check path. */
-            cur_socket->serve_path_length = strlen(cur_socket->serve_path);
-            if (!cur_socket->serve_path_length || *(cur_socket->serve_path + cur_socket->serve_path_length - 1) != '/') {
-              cur_socket->serve_path_length = 0;
-              free(cur_socket->serve_path);
-              cur_socket->serve_path = NULL;
-              error = 1;
-            }
+            rv = set_directory(&cur_socket->serve_path, argv[i], 'S');
+            if (rv < 0) error = 1;
+            else cur_socket->serve_path_length = rv;
             continue;
 
           case 'C':
-            if (set_string(&cur_socket->cert_path, argv[i]) < 0) error = 1;
+            if (set_directory(&cur_socket->cert_path, argv[i], 'C') < 0) error = 1;
             continue;
 
           default:

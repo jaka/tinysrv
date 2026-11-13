@@ -15,10 +15,12 @@ static int ts_ssl_loadcert(SSL *s, struct ts_ssl *ssl, const char *file)
 
   SSL_CTX_set_options(ssl->subcontext, SSL_OP_SINGLE_DH_USE);
   /*
-  A key of another type than the certificate (e.g. EC key, RSA certificate) loads without
-  error, so check the pair explicitly. Log it: the client only sees a failed handshake.
+  Load every certificate in the file, so intermediates (e.g. a Let's Encrypt fullchain.pem)
+  are sent too. A key of another type than the certificate (e.g. EC key, RSA certificate)
+  loads without error, so check the pair explicitly. Log it: the client only sees a failed
+  handshake.
   */
-  if (SSL_CTX_use_certificate_file(ssl->subcontext, file, SSL_FILETYPE_PEM) <= 0 ||
+  if (SSL_CTX_use_certificate_chain_file(ssl->subcontext, file) <= 0 ||
       SSL_CTX_use_PrivateKey_file(ssl->subcontext, file, SSL_FILETYPE_PEM) <= 0 ||
       !SSL_CTX_check_private_key(ssl->subcontext)) {
     syslog(LOG_ERR, "Cannot use certificate file %s: missing or mismatched certificate or key.", file);
